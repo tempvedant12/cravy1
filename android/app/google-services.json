@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "887179659419",
+    "project_id": "dineflow-5dac1",
+    "storage_bucket": "dineflow-5dac1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:887179659419:android:e7b493b952a10ff2791e3e",
+        "android_client_info": {
+          "package_name": "com.example.cravy"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAAW6sqoduiwOUGo_vfLTIPP_OPSPkxABo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:887179659419:android:9e8388a526b8996c791e3e",
+        "android_client_info": {
+          "package_name": "com.example.dineflow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAAW6sqoduiwOUGo_vfLTIPP_OPSPkxABo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
