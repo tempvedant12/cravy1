@@ -707,6 +707,10 @@ class BillTemplate extends StatelessWidget {
             Text(restaurantAddress, textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontSize: 14)),
             if (phone.isNotEmpty) Text('Phone: $phone', textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontSize: 14)),
             if (gst.isNotEmpty) Text('Tax ID: $gst', textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontSize: 14)),
+            if (notes.isNotEmpty) ...[
+              Text(notes,textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontSize: 14)),
+              const SizedBox(height: 20),
+            ],
             Divider(height: 30, thickness: 1.5, color: theme.dividerColor),
             _buildSummaryRow(theme, 'Bill No.', billNumber ?? '#SAMPLE123'),
             if (sessionKey != null) _buildSummaryRow(theme, 'Session ID', sessionKey!),
@@ -760,12 +764,7 @@ class BillTemplate extends StatelessWidget {
               _buildSummaryRow(theme, 'Paid By', paymentMethod!),
             ],
             Divider(thickness: 1.5, height: 20, color: theme.dividerColor),
-            if (notes.isNotEmpty) ...[
-              Text('Notes:', style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              Text(notes, style: TextStyle(color: theme.textColor, fontSize: 14)),
-              const SizedBox(height: 20),
-            ],
+
             Text(footer, textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontStyle: FontStyle.italic)),
             const SizedBox(height: 20),
             Text('Managed with DineFlow', textAlign: TextAlign.center, style: TextStyle(color: theme.dividerColor, fontSize: 12)),

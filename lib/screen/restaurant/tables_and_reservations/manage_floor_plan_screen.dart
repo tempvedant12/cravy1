@@ -253,11 +253,17 @@ class _AddEditFloorDialogState extends State<_AddEditFloorDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text(widget.floor == null ? 'Add Floor' : 'Manage Floor'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        decoration: const InputDecoration(hintText: 'e.g., Rooftop Terrace'),
+      content: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8.0), // Optional: Add some padding
+          child: TextField(
+            controller: _controller,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'e.g., Rooftop Terrace'),
+          ),
+        ),
       ),
+
       actions: [
         if (widget.floor != null)
           TextButton(
@@ -302,26 +308,28 @@ class _AddEditTableDialogState extends State<_AddEditTableDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text(widget.table == null ? 'Add Table' : 'Edit Table'),
-      content: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextFormField(
-              initialValue: _label,
-              decoration: const InputDecoration(labelText: 'Table Label (e.g., T1)'),
-              validator: (val) => val!.isEmpty ? 'Please enter a label' : null,
-              onSaved: (val) => _label = val!,
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              initialValue: _capacity.toString(),
-              decoration: const InputDecoration(labelText: 'Number of Seats'),
-              keyboardType: TextInputType.number,
-              validator: (val) => int.tryParse(val!) == null || int.parse(val) <= 0 ? 'Enter a valid number' : null,
-              onSaved: (val) => _capacity = int.parse(val!),
-            ),
-          ],
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                initialValue: _label,
+                decoration: const InputDecoration(labelText: 'Table Label (e.g., T1)'),
+                validator: (val) => val!.isEmpty ? 'Please enter a label' : null,
+                onSaved: (val) => _label = val!,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                initialValue: _capacity.toString(),
+                decoration: const InputDecoration(labelText: 'Number of Seats'),
+                keyboardType: TextInputType.number,
+                validator: (val) => int.tryParse(val!) == null || int.parse(val) <= 0 ? 'Enter a valid number' : null,
+                onSaved: (val) => _capacity = int.parse(val!),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [

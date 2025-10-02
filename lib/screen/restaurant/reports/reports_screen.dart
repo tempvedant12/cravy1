@@ -479,17 +479,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
           Expanded(
             child: Row(
               children: [
-                // FIX: Removed the problematic Expanded widget from here.
-                LayoutBuilder(
-                    builder: (context, constraints) {
-                      // FIX: Determine chart size dynamically based on the available space (usually 1/3 of the row space)
-                      final chartSize = min(constraints.maxHeight, constraints.maxWidth * 0.5) - 10;
-                      return Center(
-                        child: Container(
-                          // FIX: Explicitly set the size of the container based on calculation
-                          width: constraints.maxWidth * 0.4, // Allocate roughly 40% of the horizontal space for the chart
-                          height: constraints.maxHeight,
-                          child: Center(
+                Expanded( // <-- ADDED Expanded here to constrain the width
+                  flex: 1, // Giving it a proportional width
+                  child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        // Determine chart size dynamically based on the available constraints
+                        final chartSize = min(constraints.maxHeight, constraints.maxWidth) * 0.9;
+                        return Center(
+                          child: SizedBox(
+                            width: chartSize,
+                            height: chartSize,
                             child: Stack(
                               alignment: Alignment.center,
                               children: [
@@ -507,10 +506,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               ],
                             ),
                           ),
-                        ),
-                      );
-                    }
+                        );
+                      }
+                  ),
                 ),
+
                 Expanded(
                   flex: 2,
                   child: ListView(
@@ -850,7 +850,9 @@ class _GlassmorphicChartCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
           ),
-          child: child,
+          child: RepaintBoundary( // ADDED RepaintBoundary
+            child: child,
+          ),
         ),
       ),
     );
