@@ -243,6 +243,7 @@ class _AddEditFloorDialogState extends State<_AddEditFloorDialog> {
       _controller.text = widget.floor!.name;
     }
   }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -255,31 +256,61 @@ class _AddEditFloorDialogState extends State<_AddEditFloorDialog> {
       title: Text(widget.floor == null ? 'Add Floor' : 'Manage Floor'),
       content: SingleChildScrollView(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8.0), // Optional: Add some padding
+          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+          // Optional: Add some padding
           child: TextField(
             controller: _controller,
             autofocus: true,
-            decoration: const InputDecoration(hintText: 'e.g., Rooftop Terrace'),
+            decoration: const InputDecoration(
+                hintText: 'e.g., Rooftop Terrace'),
           ),
         ),
       ),
 
       actions: [
-        if (widget.floor != null)
-          TextButton(
-            onPressed: () => Navigator.of(context).pop({'action': 'delete'}),
-            child: Text('Delete Floor', style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ),
-        const Spacer(),
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
-        ElevatedButton(
-            onPressed: () => Navigator.of(context).pop({'action': 'save', 'name': _controller.text.trim()}),
-            child: const Text('Save')),
+        // FIX: The actions property in AlertDialog must be contained by a single Row/Column.
+        // We ensure the Delete button is left-aligned and the others are right-aligned.
+        // We use Row with MainAxisAlignment.spaceBetween to achieve the effect of Spacer().
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            // Delete button (Left)
+            if (widget.floor != null)
+              TextButton(
+                onPressed: () =>
+                    Navigator.of(context).pop({'action': 'delete'}),
+                child: Text('Delete Floor', style: TextStyle(color: Theme
+                    .of(context)
+                    .colorScheme
+                    .error)),
+              )
+            else
+            // Use a placeholder if no delete action is available
+              const SizedBox.shrink(),
+
+            // Cancel and Save buttons (Right)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              // Ensure this row doesn't consume all space
+              children: [
+                TextButton(onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Cancel')),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                    onPressed: () =>
+                        Navigator.of(context).pop({
+                          'action': 'save',
+                          'name': _controller.text.trim()
+                        }),
+                    child: const Text('Save')),
+              ],
+            ),
+          ],
+        ),
       ],
     );
   }
 }
-
 class _AddEditTableDialog extends StatefulWidget {
   final TableModel? table;
   final String floorId;
