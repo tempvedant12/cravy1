@@ -9,6 +9,7 @@ import 'package:cravy/screen/restaurant/tables_and_reservations/tables_and_reser
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 
+import 'EditRestaurantScreen.dart';
 import 'billing_setup/billing_setup_and_coupons.dart';
 import 'menu/menu_screen.dart';
 import 'reports/payment_history_screen.dart';
@@ -142,7 +143,11 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> {
       DashboardItem(title: 'Suppliers', icon: Icons.local_shipping_outlined, screen: SuppliersScreen(restaurantId: widget.restaurant.id)), // Add the new screen here
       DashboardItem(title: 'Reports', icon: Icons.bar_chart_outlined, screen: ReportsScreen(restaurantId: widget.restaurant.id)),
       DashboardItem(title: 'Activity Log', icon: Icons.history_outlined, screen: const PlaceholderScreen(tabName: 'Activity Log')),
-      DashboardItem(title: 'Settings', icon: Icons.settings_outlined, screen: const PlaceholderScreen(tabName: 'Settings')),
+      DashboardItem(
+        title: 'Settings',
+        icon: Icons.settings_outlined,
+        screen: EditRestaurantScreen(restaurant: widget.restaurant),
+      ),
     ];
   }
 

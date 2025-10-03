@@ -28,7 +28,8 @@ class _BillingScreenState extends State<BillingScreen> {
   // --- NEW: Ad-hoc charge state ---
   final TextEditingController _adHocChargeController = TextEditingController();
   String _adHocChargeType = 'percentage'; // 'percentage' or 'fixed'
-  final TextEditingController _adHocChargeLabelController = TextEditingController(); // ADDED
+  final TextEditingController _adHocChargeLabelController =
+  TextEditingController(); // ADDED
   // ---------------------------------
 
   double _discountPercentage = 0.0;
@@ -50,7 +51,6 @@ class _BillingScreenState extends State<BillingScreen> {
     _initialDataLoad = _loadInitialData(); // Start loading data
   }
 
-
   // --- NEW: Combined data loading function ---
   Future<void> _loadInitialData() async {
     await _fetchAllMenuItems();
@@ -58,12 +58,17 @@ class _BillingScreenState extends State<BillingScreen> {
   }
 
   Future<void> _fetchBillConfiguration() async {
-    final restaurantRef = FirebaseFirestore.instance.collection('restaurants').doc(widget.restaurantId);
+    final restaurantRef = FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId);
     final restaurantDoc = await restaurantRef.get();
     final defaultBillConfigId = restaurantDoc.data()?['defaultBillConfigId'];
 
     if (defaultBillConfigId != null) {
-      final configDoc = await restaurantRef.collection('billConfigurations').doc(defaultBillConfigId).get();
+      final configDoc = await restaurantRef
+          .collection('billConfigurations')
+          .doc(defaultBillConfigId)
+          .get();
       if (configDoc.exists && mounted) {
         setState(() {
           _billConfig = BillConfiguration.fromFirestore(configDoc);
@@ -90,7 +95,8 @@ class _BillingScreenState extends State<BillingScreen> {
 
     for (var menuDoc in menusSnapshot.docs) {
       final itemsSnapshot = await menuDoc.reference.collection('items').get();
-      allItems.addAll(itemsSnapshot.docs.map((doc) => MenuItem.fromFirestore(doc)));
+      allItems.addAll(
+          itemsSnapshot.docs.map((doc) => MenuItem.fromFirestore(doc)));
     }
 
     if (mounted) {
@@ -99,7 +105,6 @@ class _BillingScreenState extends State<BillingScreen> {
       });
     }
   }
-
 
   @override
   void dispose() {
@@ -147,7 +152,9 @@ class _BillingScreenState extends State<BillingScreen> {
 
       final coupon = CouponModel.fromFirestore(snapshot.docs.first);
 
-      if (subtotal * (1 - _discountPercentage) < coupon.minOrderAmount) { // FIX: Check against subtotal AFTER staff discount
+      if (subtotal * (1 - _discountPercentage) <
+          coupon.minOrderAmount) {
+        // FIX: Check against subtotal AFTER staff discount
         setState(() {
           _appliedCoupon = null;
           _couponError =
@@ -186,7 +193,8 @@ class _BillingScreenState extends State<BillingScreen> {
   }
 
   // --- NEW: Calculates the value of the ad-hoc charge based on type and value ---
-  MapEntry<String, double> _calculateAdHocCharge(double subtotalAfterDiscounts) {
+  MapEntry<String, double> _calculateAdHocCharge(
+      double subtotalAfterDiscounts) {
     final input = _adHocChargeController.text.trim();
     final value = double.tryParse(input) ?? 0.0;
 
@@ -200,7 +208,8 @@ class _BillingScreenState extends State<BillingScreen> {
       final amount = subtotalAfterDiscounts * (value / 100.0);
       finalLabel = '$finalLabel (${input}%)'; // Append percentage to label
       return MapEntry(finalLabel, amount);
-    } else { // Fixed amount
+    } else {
+      // Fixed amount
       finalLabel = '$finalLabel (Fixed)'; // Append fixed tag to label
       return MapEntry(finalLabel, value);
     }
@@ -214,10 +223,12 @@ class _BillingScreenState extends State<BillingScreen> {
       body: Stack(
         children: [
           const _StaticBackground(),
-          FutureBuilder( // Check if initial data (config/menu items) is loaded
+          FutureBuilder(
+            // Check if initial data (config/menu items) is loaded
             future: _initialDataLoad,
             builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting || _allMenuItems.isEmpty) {
+              if (snapshot.connectionState == ConnectionState.waiting ||
+                  _allMenuItems.isEmpty) {
                 return const Center(child: CircularProgressIndicator());
               }
 
@@ -226,7 +237,9 @@ class _BillingScreenState extends State<BillingScreen> {
                 backgroundColor: Colors.transparent,
                 appBar: AppBar(
                   title: Text('Bill: ${widget.sessionKey}'),
-                  backgroundColor: Theme.of(context).scaffoldBackgroundColor.withOpacity(0.85),
+                  backgroundColor: Theme.of(context)
+                      .scaffoldBackgroundColor
+                      .withOpacity(0.85),
                   elevation: 0,
                 ),
                 body: StreamBuilder<QuerySnapshot>(
@@ -257,7 +270,8 @@ class _BillingScreenState extends State<BillingScreen> {
 
                     // --- FIX: Calculate Running Total and Charges ---
                     // Initialize the running total after applying discounts
-                    double runningTotal = subtotal - discountAmount - couponDiscount;
+                    double runningTotal =
+                        subtotal - discountAmount - couponDiscount;
 
                     final Map<String, double> finalCharges = {};
 
@@ -267,9 +281,12 @@ class _BillingScreenState extends State<BillingScreen> {
                         // Check if the charge is marked as mandatory to be applied automatically
                         if (charge.isMandatory) {
                           // Calculate the charge amount based on the current running total
-                          final chargeAmount = runningTotal * (charge.rate / 100.0);
+                          final chargeAmount =
+                              runningTotal * (charge.rate / 100.0);
 
-                          finalCharges['${charge.label} (${charge.rate.toStringAsFixed(1)}%)'] = chargeAmount;
+                          finalCharges[
+                          '${charge.label} (${charge.rate.toStringAsFixed(1)}%)'] =
+                              chargeAmount;
 
                           // Add the charge amount to the running total (compounding)
                           runningTotal += chargeAmount;
@@ -278,7 +295,8 @@ class _BillingScreenState extends State<BillingScreen> {
                     }
 
                     // 2. Ad-Hoc Charge (Compounding)
-                    final MapEntry<String, double> adHocCharge = _calculateAdHocCharge(runningTotal);
+                    final MapEntry<String, double> adHocCharge =
+                    _calculateAdHocCharge(runningTotal);
                     if (adHocCharge.value > 0) {
                       finalCharges[adHocCharge.key] = adHocCharge.value;
                       // Add the ad-hoc charge to the running total
@@ -288,7 +306,6 @@ class _BillingScreenState extends State<BillingScreen> {
                     // The final total is the value of the running total after all calculations
                     final grandTotal = runningTotal;
                     // -----------------------------------------------------------
-
 
                     return _buildBillUI(
                       context,
@@ -441,15 +458,14 @@ class _BillingScreenState extends State<BillingScreen> {
               ),
               // --- END DISCOUNT INPUTS ---
 
-
               const Divider(height: 32),
 
               // --- CHARGES INPUT (Ad-Hoc) ---
-              Text('Ad-Hoc Charges (Optional)', style: theme.textTheme.titleMedium),
+              Text('Ad-Hoc Charges (Optional)',
+                  style: theme.textTheme.titleMedium),
               const SizedBox(height: 8),
               _buildAdHocChargeInput(),
               // --- END CHARGES INPUT ---
-
 
               const Divider(height: 32),
               // --- FINAL BREAKDOWN SUMMARY ---
@@ -464,7 +480,8 @@ class _BillingScreenState extends State<BillingScreen> {
 
               // 3. Coupon Discount (Shows as negative amount)
               if (_appliedCoupon != null)
-                _buildSummaryRow('Coupon: ${_appliedCoupon!.code}', -couponDiscount, theme),
+                _buildSummaryRow(
+                    'Coupon: ${_appliedCoupon!.code}', -couponDiscount, theme),
 
               // 4. Mandatory and Ad-Hoc Charges (Taxes/Charges added here)
               if (finalCharges.isNotEmpty) ...[
@@ -478,7 +495,6 @@ class _BillingScreenState extends State<BillingScreen> {
                 }).toList(),
               ],
               // --- END FINAL BREAKDOWN SUMMARY ---
-
 
               const Divider(height: 32),
               _buildSummaryRow('Grand Total', grandTotal, theme,
@@ -511,14 +527,14 @@ class _BillingScreenState extends State<BillingScreen> {
   // NEW: UI for Ad-Hoc Charge Input
   Widget _buildAdHocChargeInput() {
     final theme = Theme.of(context);
-    return Column( // Wrap in column to add the label input
+    return Column(
+      // Wrap in column to add the label input
       children: [
         TextFormField(
           controller: _adHocChargeLabelController,
           decoration: const InputDecoration(
               labelText: 'Charge Label/Reason',
-              hintText: 'e.g., Delivery Fee, Special Service'
-          ),
+              hintText: 'e.g., Delivery Fee, Special Service'),
         ),
         const SizedBox(height: 10),
         Row(
@@ -528,11 +544,17 @@ class _BillingScreenState extends State<BillingScreen> {
               child: TextFormField(
                 controller: _adHocChargeController,
                 decoration: InputDecoration(
-                    labelText: _adHocChargeType == 'percentage' ? 'Rate (%)' : 'Amount (₹)',
+                    labelText: _adHocChargeType == 'percentage'
+                        ? 'Rate (%)'
+                        : 'Amount (₹)',
                     hintText: 'e.g., 5 or 50.00',
                     suffixText: _adHocChargeType == 'percentage' ? '%' : '₹'),
                 keyboardType: TextInputType.number,
-                validator: (val) => (val != null && val.isNotEmpty && double.tryParse(val) == null) ? 'Invalid number' : null,
+                validator: (val) => (val != null &&
+                    val.isNotEmpty &&
+                    double.tryParse(val) == null)
+                    ? 'Invalid number'
+                    : null,
               ),
             ),
             const SizedBox(width: 8),
@@ -608,33 +630,57 @@ class _BillingScreenState extends State<BillingScreen> {
       List<DocumentSnapshot> sessionOrders,
       double discountPercentage,
       String? couponCode,
-      double couponDiscount, // NEW: Coupon discount amount
+      double couponDiscount,
       String paymentMethod,
       double finalTotal,
-      Map<String, double> finalCharges, // NEW: Receive final charges map
+      Map<String, double> finalCharges,
       ) async {
     final batch = FirebaseFirestore.instance.batch();
 
-    // Create a list of charges suitable for Firestore storage
-    final List<Map<String, dynamic>> chargesList = finalCharges.entries.map((e) => {
+    // --- START: New Bill Number Logic ---
+    final now = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+
+    // Get the count of paid orders for the current day to generate the next number
+    final paidOrdersTodaySnapshot = await FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('orders')
+        .where('isPaid', isEqualTo: true)
+        .where('billingDetails.billedAt', isGreaterThanOrEqualTo: startOfDay)
+        .where('billingDetails.billedAt', isLessThan: endOfDay)
+        .get();
+
+    final newOrderCount = paidOrdersTodaySnapshot.docs.length + 1;
+    final formattedOrderCount = newOrderCount.toString().padLeft(2, '0');
+    final formattedDate = DateFormat('ddMMyyyy').format(now);
+    final newBillNumber = '$formattedOrderCount$formattedDate';
+    // --- END: New Bill Number Logic ---
+
+    final List<Map<String, dynamic>> chargesList = finalCharges.entries
+        .map((e) => {
       'label': e.key,
       'amount': e.value,
-    }).toList();
+    })
+        .toList();
 
-    // This line is corrected to handle cases where 'isPaid' might be null
-    final unpaidOrders = sessionOrders.where((doc) => (doc.data() as Map<String, dynamic>)['isPaid'] != true).toList();
+    final unpaidOrders = sessionOrders
+        .where((doc) => (doc.data() as Map<String, dynamic>)['isPaid'] != true)
+        .toList();
 
     for (var orderDoc in unpaidOrders) {
       batch.update(orderDoc.reference, {
         'isPaid': true,
         'billingDetails': {
+          'billNumber': newBillNumber, // <-- Store the new bill number
           'discount': discountPercentage,
           'couponCode': couponCode,
-          'couponDiscount': couponDiscount, // FIX: Store coupon discount amount
+          'couponDiscount': couponDiscount,
           'finalTotal': finalTotal,
           'paymentMethod': paymentMethod,
           'billedAt': FieldValue.serverTimestamp(),
-          'appliedCharges': chargesList, // Store the applied charges
+          'appliedCharges': chargesList,
         }
       });
     }
@@ -646,7 +692,8 @@ class _BillingScreenState extends State<BillingScreen> {
     final formatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
     TextStyle style = theme.textTheme.titleMedium!;
     if (isGrandTotal) {
-      style = theme.textTheme.headlineMedium!.copyWith(color: theme.primaryColor);
+      style =
+          theme.textTheme.headlineMedium!.copyWith(color: theme.primaryColor);
     } else if (isTotal) {
       style = theme.textTheme.titleLarge!;
     }

@@ -1,8 +1,10 @@
-
+import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cravy/screen/restaurant/orders/bill_template_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
+import 'package:printing/printing.dart';
 import '../billing_setup/bill_design_screen.dart';
 
 class ManageBillDesignsScreen extends StatefulWidget {
@@ -76,6 +78,18 @@ class _ManageBillDesignsScreenState extends State<ManageBillDesignsScreen> {
     );
 
     if (confirm == true) {
+      // Unset default if this was the default
+      final restaurantDoc = await FirebaseFirestore.instance
+          .collection('restaurants')
+          .doc(widget.restaurantId)
+          .get();
+      if (restaurantDoc.data()?['defaultBillConfigId'] == configId) {
+        await FirebaseFirestore.instance
+            .collection('restaurants')
+            .doc(widget.restaurantId)
+            .update({'defaultBillConfigId': FieldValue.delete()});
+      }
+
       await FirebaseFirestore.instance
           .collection('restaurants')
           .doc(widget.restaurantId)
@@ -118,7 +132,6 @@ class _ManageBillDesignsScreenState extends State<ManageBillDesignsScreen> {
                       .collection('restaurants')
                       .doc(widget.restaurantId)
                       .collection('billConfigurations')
-                      .orderBy('template')
                       .snapshots(),
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
@@ -133,7 +146,7 @@ class _ManageBillDesignsScreenState extends State<ManageBillDesignsScreen> {
 
                     return LayoutBuilder(builder: (context, constraints) {
                       final crossAxisCount =
-                      (constraints.maxWidth / 400).floor().clamp(1, 4);
+                      (constraints.maxWidth / 380).floor().clamp(1, 4);
 
                       return AnimationLimiter(
                         child: GridView.builder(
@@ -155,6 +168,8 @@ class _ManageBillDesignsScreenState extends State<ManageBillDesignsScreen> {
                               child: ScaleAnimation(
                                 child: FadeInAnimation(
                                   child: BillPreviewCard(
+                                    key: ValueKey(config
+                                        .id), // Add key for state management
                                     config: config,
                                     restaurantName: _restaurantName!,
                                     restaurantAddress: _restaurantAddress!,
@@ -229,10 +244,59 @@ class BillPreviewCard extends StatelessWidget {
     required this.onDelete,
   });
 
+  Future<Uint8List> _generatePreviewImage() async {
+    final sampleItems = [
+      {'name': 'Sample Item 1', 'qty': 1, 'price': 100.0, 'options': ''},
+      {
+        'name': 'Sample Item 2',
+        'qty': 2,
+        'price': 50.0,
+        'options': 'Extra Cheese'
+      },
+      {'name': 'More Items', 'qty': 3, 'price': 25.0, 'options': ''},
+    ];
+    final double subtotal = 375.0;
+    final double staffDiscount = 37.5;
+    double total = subtotal - staffDiscount;
+    final Map<String, double> calculatedCharges = {};
+    for (var charge in config.customCharges) {
+      if (charge.isMandatory) {
+        final chargeAmount = total * (charge.rate / 100.0);
+        calculatedCharges[
+        '${charge.label} (${charge.rate.toStringAsFixed(1)}%)'] =
+            chargeAmount;
+        total += chargeAmount;
+      }
+    }
+
+    final billData = {
+      'restaurantName': restaurantName,
+      'restaurantAddress': restaurantAddress,
+      'phone': config.contactPhone,
+      'gst': config.gstNumber,
+      'footer': config.footerNote,
+      'notes': config.billNotes,
+      'billItems': sampleItems,
+      'subtotal': subtotal,
+      'staffDiscount': staffDiscount,
+      'couponDiscount': 0.0,
+      'calculatedCharges': calculatedCharges,
+      'total': total,
+      'billNumber': 'PREVIEW',
+      'sessionKey': 'Sample Session',
+      'paymentMethod': 'Cash',
+      'template': config.template,
+    };
+
+    final pdfBytes = await generatePdfOnIsolate(billData);
+    final image =
+    await Printing.raster(pdfBytes, pages: [0], dpi: 150).first;
+    return image.toPng();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final billTheme = BillTheme.getThemeByName(config.template);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(24),
@@ -256,43 +320,29 @@ class BillPreviewCard extends StatelessWidget {
         ),
         child: Column(
           children: [
-            
-            
-            
             Expanded(
-              child: ClipRect(
-                child: AbsorbPointer(
-                  child: FittedBox(
-                    fit: BoxFit.contain,
-                    alignment: Alignment.topCenter,
-                    child: SizedBox(
-                      width: 400,
-                      child: BillTemplate(
-                        theme: billTheme,
-                        restaurantName: restaurantName,
-                        restaurantAddress: restaurantAddress,
-                        phone: config.contactPhone,
-                        gst: config.gstNumber,
-                        footer: config.footerNote,
-                        notes: config.billNotes,
-                        sampleItems: const [
-                          {'name': 'Sample Item 1', 'qty': 1, 'price': 100.0},
-                          {'name': 'Sample Item 2', 'qty': 2, 'price': 50.0},
-                          {'name': 'Another Item with a long name', 'qty': 1, 'price': 120.0},
-                          {'name': 'More Items', 'qty': 3, 'price': 25.0},
-                        ],
-                        subtotal: 495.0,
-                        staffDiscount: 49.5,
-                        couponDiscount: 0.0,
-                        calculatedCharges: {'GST (5%)': 22.28},
-                        total: 467.78,
-                      ),
-                    ),
-                  ),
+              child: Container(
+                color: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: FutureBuilder<Uint8List>(
+                  future: _generatePreviewImage(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError || !snapshot.hasData) {
+                      return Center(
+                          child: Icon(Icons.error_outline,
+                              color: Colors.red.shade300));
+                    }
+                    return Image.memory(
+                      snapshot.data!,
+                      fit: BoxFit.contain,
+                    );
+                  },
                 ),
               ),
             ),
-            
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               color: theme.colorScheme.surface.withOpacity(0.5),
@@ -352,7 +402,8 @@ class _StaticBackground extends StatelessWidget {
             bottom: -150,
             right: -200,
             child: _buildShape(
-                theme.colorScheme.surface.withOpacity(isDark ? 0.3 : 0.2), 450),
+                theme.colorScheme.surface.withOpacity(isDark ? 0.3 : 0.2),
+                450),
           ),
         ],
       ),

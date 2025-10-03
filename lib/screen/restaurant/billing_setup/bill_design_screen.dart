@@ -1,8 +1,9 @@
-
-
+import 'package:cravy/screen/restaurant/orders/bill_template_screen.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:printing/printing.dart';
 
 class BillConfiguration {
   final String id;
@@ -10,8 +11,10 @@ class BillConfiguration {
   final String contactPhone;
   final String footerNote;
   final String billNotes;
-  final String template;
   final List<CustomChargeModel> customCharges;
+  final String template;
+  final double paperWidth; // New
+  final double fontSize; // New
 
   BillConfiguration({
     required this.id,
@@ -19,8 +22,10 @@ class BillConfiguration {
     required this.contactPhone,
     required this.footerNote,
     required this.billNotes,
-    required this.template,
     required this.customCharges,
+    required this.template,
+    this.paperWidth = 58.0, // New
+    this.fontSize = 8.0, // New
   });
 
   factory BillConfiguration.fromFirestore(DocumentSnapshot doc) {
@@ -32,9 +37,11 @@ class BillConfiguration {
       contactPhone: data['contactPhone'] ?? '',
       footerNote: data['footerNote'] ?? '',
       billNotes: data['billNotes'] ?? '',
-      template: data['template'] ?? 'Standard',
       customCharges:
       chargesData.map((map) => CustomChargeModel.fromMap(map)).toList(),
+      template: data['template'] ?? 'Standard',
+      paperWidth: (data['paperWidth'] as num?)?.toDouble() ?? 58.0, // New
+      fontSize: (data['fontSize'] as num?)?.toDouble() ?? 8.0, // New
     );
   }
 
@@ -44,11 +51,14 @@ class BillConfiguration {
       'contactPhone': contactPhone,
       'footerNote': footerNote,
       'billNotes': billNotes,
-      'template': template,
       'customCharges': customCharges.map((c) => c.toMap()).toList(),
+      'template': template,
+      'paperWidth': paperWidth, // New
+      'fontSize': fontSize, // New
     };
   }
 }
+
 
 class CustomChargeModel {
   final String label;
@@ -95,8 +105,14 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _footerNotesController = TextEditingController();
   final TextEditingController _billNotesController = TextEditingController();
+  final TextEditingController _paperWidthController = TextEditingController();
+  final TextEditingController _fontSizeController = TextEditingController();
 
-  String _selectedTemplate = 'Standard';
+  String _template = 'Standard';
+  double _paperWidth = 58.0;
+  double _fontSize = 8.0;
+
+
   bool _isLoading = true;
   List<CustomChargeModel> _customCharges = [];
 
@@ -107,21 +123,63 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
   void initState() {
     super.initState();
     _loadInitialData();
+    // Add listeners to trigger rebuilds on text change
+    _gstController.addListener(_rebuildPreview);
+    _phoneController.addListener(_rebuildPreview);
+    _footerNotesController.addListener(_rebuildPreview);
+    _billNotesController.addListener(_rebuildPreview);
+    _paperWidthController.addListener(() {
+      setState(() {
+        _paperWidth = double.tryParse(_paperWidthController.text) ?? 58.0;
+      });
+    });
+    _fontSizeController.addListener(() {
+      setState(() {
+        _fontSize = double.tryParse(_fontSizeController.text) ?? 8.0;
+      });
+    });
   }
 
+  @override
+  void dispose() {
+    // Remove listeners to prevent memory leaks
+    _gstController.removeListener(_rebuildPreview);
+    _phoneController.removeListener(_rebuildPreview);
+    _footerNotesController.removeListener(_rebuildPreview);
+    _billNotesController.removeListener(_rebuildPreview);
+    _paperWidthController.dispose();
+    _fontSizeController.dispose();
+
+    _gstController.dispose();
+    _phoneController.dispose();
+    _footerNotesController.dispose();
+    _billNotesController.dispose();
+    super.dispose();
+  }
+
+  void _rebuildPreview() {
+    setState(() {});
+  }
+
+
   Future<void> _loadInitialData() async {
-    
     if (widget.existingConfig != null) {
       final config = widget.existingConfig!;
       _gstController.text = config.gstNumber;
       _phoneController.text = config.contactPhone;
       _footerNotesController.text = config.footerNote;
       _billNotesController.text = config.billNotes;
-      _selectedTemplate = config.template;
       _customCharges = config.customCharges;
+      _template = config.template;
+      _paperWidth = config.paperWidth;
+      _fontSize = config.fontSize;
     } else {
       _footerNotesController.text = 'Thank you! Please visit again.';
     }
+
+    _paperWidthController.text = _paperWidth.toStringAsFixed(0);
+    _fontSizeController.text = _fontSize.toStringAsFixed(1);
+
 
     final doc = await FirebaseFirestore.instance
         .collection('restaurants')
@@ -140,48 +198,49 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
     }
   }
 
-
   Future<void> _saveBillingConfig() async {
-    if (_formKey.currentState!.validate()) {
-      setState(() => _isLoading = true);
+    // No need to validate the form here as the save button is global.
+    // The formKey is only for the first tab now.
+    setState(() => _isLoading = true);
 
-      final config = BillConfiguration(
-        id: widget.existingConfig?.id ?? '', 
-        gstNumber: _gstController.text.trim(),
-        contactPhone: _phoneController.text.trim(),
-        footerNote: _footerNotesController.text.trim(),
-        billNotes: _billNotesController.text.trim(),
-        template: _selectedTemplate,
-        customCharges: _customCharges,
-      );
+    final config = BillConfiguration(
+      id: widget.existingConfig?.id ?? '',
+      gstNumber: _gstController.text.trim(),
+      contactPhone: _phoneController.text.trim(),
+      footerNote: _footerNotesController.text.trim(),
+      billNotes: _billNotesController.text.trim(),
+      customCharges: _customCharges,
+      template: _template,
+      paperWidth: _paperWidth,
+      fontSize: _fontSize,
+    );
 
-      final collection = FirebaseFirestore.instance
-          .collection('restaurants')
-          .doc(widget.restaurantId)
-          .collection('billConfigurations');
+    final collection = FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('billConfigurations');
 
-      try {
-        if (widget.existingConfig == null) {
-          await collection.add(config.toMap());
-        } else {
-          await collection.doc(config.id).update(config.toMap());
-        }
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Bill design saved successfully!')),
-          );
-          Navigator.of(context).pop();
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error saving design: ${e.toString()}')),
-          );
-        }
-      } finally {
-        if (mounted) setState(() => _isLoading = false);
+    try {
+      if (widget.existingConfig == null) {
+        await collection.add(config.toMap());
+      } else {
+        await collection.doc(config.id).update(config.toMap());
       }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bill design saved successfully!')),
+        );
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving design: ${e.toString()}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -210,11 +269,12 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
         ),
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
-            : Form(
-          key: _formKey,
-          child: TabBarView(
-            children: [
-              ListView(
+            : TabBarView(
+          children: [
+            // Design Tab
+            Form(
+              key: _formKey,
+              child: ListView(
                 padding: const EdgeInsets.all(24.0),
                 children: [
                   _buildConfigurationSection(),
@@ -222,32 +282,10 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
                   _buildCustomChargesSection(),
                 ],
               ),
-              SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(
-                    vertical: 24.0, horizontal: 12.0),
-                child: Column(
-                  children: [
-                    Padding(
-                      padding:
-                      const EdgeInsets.symmetric(horizontal: 12.0),
-                      child: _buildTemplateSelectionSection(),
-                    ),
-                    const SizedBox(height: 24),
-                    _BillPreview(
-                      restaurantName: _restaurantName,
-                      restaurantAddress: _restaurantAddress,
-                      gst: _gstController.text,
-                      phone: _phoneController.text,
-                      footer: _footerNotesController.text,
-                      notes: _billNotesController.text,
-                      customCharges: _customCharges,
-                      template: _selectedTemplate,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+            ),
+            // Preview Tab
+            _buildBillPreview(),
+          ],
         ),
       ),
     );
@@ -271,6 +309,8 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
                   labelText: 'Tax/Registration No.',
                   hintText: 'e.g., GSTIN/VAT ID',
                   icon: Icon(Icons.badge_outlined)),
+              validator: (value) =>
+              value!.trim().isEmpty ? 'This field is required' : null,
             ),
             const SizedBox(height: 20),
             TextFormField(
@@ -302,6 +342,178 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
       ),
     );
   }
+  Widget _buildAppearanceSection() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      margin: const EdgeInsets.symmetric(horizontal: 24.0),
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Appearance & Layout',
+                style: Theme.of(context).textTheme.titleLarge),
+            Text('Test print features and align billing with your printer size requirements.',
+                style: Theme.of(context).textTheme.titleSmall),
+            const Divider(height: 24),
+
+
+            // Template Dropdown
+            DropdownButtonFormField<String>(
+              value: _template,
+              decoration: const InputDecoration(
+                labelText: 'Template',
+                icon: Icon(Icons.style_outlined),
+              ),
+              items: [
+                'Standard',
+                'Compact',
+                'Bold Header',
+                'Minimalist',
+                'Centered Total',
+                'Detailed Items'
+              ]
+                  .map((label) =>
+                  DropdownMenuItem(value: label, child: Text(label)))
+                  .toList(),
+              onChanged: (value) {
+                setState(() {
+                  _template = value!;
+                });
+              },
+            ),
+            const SizedBox(height: 20),
+            // Paper Width and Font Size Inputs
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _paperWidthController,
+                    decoration: const InputDecoration(
+                      labelText: 'Paper Width',
+                      suffixText: 'mm',
+                    ),
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: TextFormField(
+                    controller: _fontSizeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Font Size',
+                      suffixText: 'pt',
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  ),
+                ),
+              ],
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBillPreview() {
+    final sampleItems = [
+      {
+        'name': 'Classic Burger (Extra Cheese)',
+        'qty': 1,
+        'price': 290.0,
+        'options': ''
+      },
+      {'name': 'Fries & Coke Combo', 'qty': 2, 'price': 150.0, 'options': ''},
+    ];
+    final double subtotal = sampleItems.fold(
+        0.0, (sum, item) => sum + (item['price'] as num) * (item['qty'] as num));
+    final double staffDiscount = subtotal * 0.10;
+    final double couponDiscount = subtotal * 0.05;
+    double total = subtotal - staffDiscount - couponDiscount;
+
+    final Map<String, double> calculatedCharges = {};
+    for (var charge in _customCharges) {
+      if (charge.isMandatory) {
+        final chargeAmount = total * (charge.rate / 100.0);
+        calculatedCharges[
+        '${charge.label} (${charge.rate.toStringAsFixed(1)}%)'] =
+            chargeAmount;
+        total += chargeAmount;
+      }
+    }
+
+    final billData = {
+      'restaurantName': _restaurantName,
+      'restaurantAddress': _restaurantAddress,
+      'phone': _phoneController.text,
+      'gst': _gstController.text,
+      'footer': _footerNotesController.text,
+      'notes': _billNotesController.text,
+      'billItems': sampleItems,
+      'subtotal': subtotal,
+      'staffDiscount': staffDiscount,
+      'couponDiscount': couponDiscount,
+      'calculatedCharges': calculatedCharges,
+      'total': total,
+      'billNumber': 'PREVIEW',
+      'sessionKey': 'Sample',
+      'paymentMethod': 'Cash',
+      'template': _template,
+      'paperWidth': _paperWidth,
+      'fontSize': _fontSize,
+    };
+
+    return Scaffold(
+      backgroundColor: Colors.grey[300],
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () async {
+          final pdfData = await generatePdfOnIsolate(billData);
+          await Printing.layoutPdf(onLayout: (format) async => pdfData);
+        },
+        label: const Text('Test Print'),
+        icon: const Icon(Icons.print),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.symmetric(vertical: 24.0),
+        children: [
+          _buildAppearanceSection(),
+          const SizedBox(height: 24),
+          Center(
+            child: SizedBox(
+              width: _paperWidth * 4,
+              height: 600,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 10,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: PdfPreview(
+                  key: ValueKey(billData.toString()),
+                  build: (format) => generatePdfOnIsolate(billData),
+                  useActions: false,
+                  allowSharing: false,
+                  allowPrinting: false,
+                  canChangeOrientation: false,
+                  canChangePageFormat: false,
+                  canDebug: false,
+                  pdfPreviewPageDecoration: const BoxDecoration(),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
 
   Widget _buildCustomChargesSection() {
     final theme = Theme.of(context);
@@ -346,7 +558,8 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
                     Text(charge.isMandatory ? 'Mandatory' : 'Optional',
                         style: theme.textTheme.bodySmall),
                     IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                      icon: const Icon(Icons.delete_outline,
+                          size: 20, color: Colors.red),
                       onPressed: () =>
                           setState(() => _customCharges.remove(charge)),
                     ),
@@ -376,103 +589,9 @@ class _BillDesignScreenState extends State<BillDesignScreen> {
         } else {
           _customCharges.add(result);
         }
+        _rebuildPreview();
       });
     }
-  }
-
-  Widget _buildTemplateSelectionSection() {
-    final Map<String, BillTheme> templates = {
-      'Standard': BillTheme.standard,
-      'Minimalist': BillTheme.minimalist,
-      'Modern': BillTheme.modern,
-      'Cyberpunk': BillTheme.cyberpunk,
-    };
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Select Bill Template',
-            style: Theme.of(context).textTheme.titleLarge),
-        const Divider(height: 24),
-        SizedBox(
-          height: 140,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: templates.length,
-            itemBuilder: (context, index) {
-              final title = templates.keys.elementAt(index);
-              final theme = templates.values.elementAt(index);
-              final isSelected = _selectedTemplate == title;
-
-              return GestureDetector(
-                onTap: () => setState(() => _selectedTemplate = title),
-                child: TemplatePreviewCard(
-                  title: title,
-                  theme: theme,
-                  isSelected: isSelected,
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class TemplatePreviewCard extends StatelessWidget {
-  final String title;
-  final BillTheme theme;
-  final bool isSelected;
-
-  const TemplatePreviewCard({
-    super.key,
-    required this.title,
-    required this.theme,
-    required this.isSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final appTheme = Theme.of(context);
-    return Container(
-      width: 120,
-      margin: const EdgeInsets.only(right: 16),
-      child: Card(
-        elevation: isSelected ? 8 : 2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(
-            color: isSelected ? appTheme.primaryColor : appTheme.dividerColor,
-            width: isSelected ? 3 : 1,
-          ),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: Container(
-                  color: theme.background,
-                  child: Icon(Icons.receipt_long, size: 40, color: theme.textColor),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.all(8.0),
-                color: appTheme.cardColor,
-                child: Text(
-                  title,
-                  textAlign: TextAlign.center,
-                  style: appTheme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 
@@ -493,8 +612,10 @@ class __AddEditChargeDialogState extends State<_AddEditChargeDialog> {
   @override
   void initState() {
     super.initState();
-    _labelController = TextEditingController(text: widget.initialCharge?.label ?? '');
-    _rateController = TextEditingController(text: widget.initialCharge?.rate.toString() ?? '0.0');
+    _labelController =
+        TextEditingController(text: widget.initialCharge?.label ?? '');
+    _rateController = TextEditingController(
+        text: widget.initialCharge?.rate.toString() ?? '0.0');
     _isMandatory = widget.initialCharge?.isMandatory ?? false;
   }
 
@@ -519,7 +640,8 @@ class __AddEditChargeDialogState extends State<_AddEditChargeDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.initialCharge == null ? 'Add New Charge' : 'Edit Charge'),
+      title:
+      Text(widget.initialCharge == null ? 'Add New Charge' : 'Edit Charge'),
       content: SingleChildScrollView(
         child: Form(
           key: _formKey,
@@ -528,8 +650,10 @@ class __AddEditChargeDialogState extends State<_AddEditChargeDialog> {
             children: [
               TextFormField(
                 controller: _labelController,
-                decoration: const InputDecoration(labelText: 'Charge/Tax Label'),
-                validator: (val) => val!.trim().isEmpty ? 'Enter a label' : null,
+                decoration:
+                const InputDecoration(labelText: 'Charge/Tax Label'),
+                validator: (val) =>
+                val!.trim().isEmpty ? 'Enter a label' : null,
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -553,237 +677,11 @@ class __AddEditChargeDialogState extends State<_AddEditChargeDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
         ElevatedButton(onPressed: _save, child: const Text('Save')),
       ],
-    );
-  }
-}
-
-class BillTheme {
-  final Color background;
-  final Color textColor;
-  final Color accentColor;
-  final Color dividerColor;
-
-  const BillTheme({
-    required this.background,
-    required this.textColor,
-    required this.accentColor,
-    required this.dividerColor,
-  });
-
-  static BillTheme getThemeByName(String name) {
-    switch (name) {
-      case 'Minimalist': return minimalist;
-      case 'Modern': return modern;
-      case 'Cyberpunk': return cyberpunk;
-      default: return standard;
-    }
-  }
-
-  static const BillTheme standard = BillTheme(background: Colors.white, textColor: Colors.black, accentColor: Colors.black, dividerColor: Colors.grey);
-  static const BillTheme minimalist = BillTheme(background: Colors.white, textColor: Color(0xFF555555), accentColor: Color(0xFF111111), dividerColor: Color(0xFFEEEEEE));
-  static const BillTheme modern = BillTheme(background: Color(0xFFF8F8F8), textColor: Color(0xFF333333), accentColor: Colors.deepOrange, dividerColor: Color(0xFFDDDDDD));
-  static const BillTheme cyberpunk = BillTheme(background: Color(0xFF0A0A1A), textColor: Color(0xFFE0E0E0), accentColor: Color(0xFF00FFFF), dividerColor: Color(0xFF44475A));
-}
-
-class _BillPreview extends StatelessWidget {
-  final String restaurantName;
-  final String restaurantAddress;
-  final String gst;
-  final String phone;
-  final String footer;
-  final String notes;
-  final List<CustomChargeModel> customCharges;
-  final String template;
-
-  const _BillPreview({
-    required this.restaurantName,
-    required this.restaurantAddress,
-    required this.gst,
-    required this.phone,
-    required this.footer,
-    required this.notes,
-    required this.customCharges,
-    required this.template,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final billTheme = BillTheme.getThemeByName(template);
-    final sampleItems = [
-      {'name': 'Classic Burger (Extra Cheese)', 'qty': 1, 'price': 290.0},
-      {'name': 'Fries & Coke Combo', 'qty': 2, 'price': 150.0},
-    ];
-    final double subtotal = sampleItems.fold(0.0, (sum, item) => sum + (item['price'] as num) * (item['qty'] as num));
-    final double staffDiscount = subtotal * 0.10;
-    final double couponDiscount = subtotal * 0.05;
-    double total = subtotal - staffDiscount - couponDiscount;
-
-    final Map<String, double> calculatedCharges = {};
-    for (var charge in customCharges) {
-      if (charge.isMandatory) {
-        final chargeAmount = total * (charge.rate / 100.0);
-        calculatedCharges['${charge.label} (${charge.rate.toStringAsFixed(1)}%)'] = chargeAmount;
-        total += chargeAmount;
-      }
-    }
-
-    return BillTemplate(
-      theme: billTheme,
-      restaurantName: restaurantName,
-      restaurantAddress: restaurantAddress,
-      phone: phone,
-      gst: gst,
-      footer: footer,
-      notes: notes,
-      sampleItems: sampleItems.cast<Map<String, Object>>(), 
-      subtotal: subtotal,
-      staffDiscount: staffDiscount,
-      couponDiscount: couponDiscount,
-      calculatedCharges: calculatedCharges,
-      total: total,
-    );
-  }
-}
-
-class BillTemplate extends StatelessWidget {
-  final BillTheme theme;
-  final String restaurantName;
-  final String restaurantAddress;
-  final String phone;
-  final String gst;
-  final String footer;
-  final String notes;
-  final List<Map<String, Object>>? billItems;
-  final List<Map<String, Object>>? sampleItems;
-  final double subtotal;
-  final double staffDiscount;
-  final double couponDiscount; // <--- ADDED FIELD
-  final Map<String, double> calculatedCharges;
-  final double total;
-  final String? billNumber;
-  final String? sessionKey;
-  final String? paymentMethod;
-
-  const BillTemplate({
-    super.key,
-    required this.theme,
-    required this.restaurantName,
-    required this.restaurantAddress,
-    required this.phone,
-    required this.gst,
-    required this.footer,
-    required this.notes,
-    this.billItems,
-    this.sampleItems,
-    required this.subtotal,
-    required this.staffDiscount,
-    required this.couponDiscount, // <--- ADDED FIELD
-    required this.calculatedCharges,
-    required this.total,
-    this.billNumber,
-    this.sessionKey,
-    this.paymentMethod,
-  }) : assert(billItems != null || sampleItems != null);
-
-  @override
-  Widget build(BuildContext context) {
-    final formatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
-    final itemsToDisplay = billItems ?? sampleItems!;
-
-    return Material(
-      elevation: 4,
-      borderRadius: BorderRadius.circular(8),
-      color: theme.background,
-      child: Container(
-        padding: const EdgeInsets.all(20.0),
-        decoration: BoxDecoration(borderRadius: BorderRadius.circular(8), border: Border.all(color: theme.dividerColor)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(restaurantName, textAlign: TextAlign.center, style: TextStyle(color: theme.accentColor, fontSize: 22, fontWeight: FontWeight.bold)),
-            Text(restaurantAddress, textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontSize: 14)),
-            if (phone.isNotEmpty) Text('Phone: $phone', textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontSize: 14)),
-            if (gst.isNotEmpty) Text('Tax ID: $gst', textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontSize: 14)),
-            if (notes.isNotEmpty) ...[
-              Text(notes,textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontSize: 14)),
-              const SizedBox(height: 20),
-            ],
-            Divider(height: 30, thickness: 1.5, color: theme.dividerColor),
-            _buildSummaryRow(theme, 'Bill No.', billNumber ?? '#SAMPLE123'),
-            if (sessionKey != null) _buildSummaryRow(theme, 'Session ID', sessionKey!),
-            _buildSummaryRow(theme, 'Date/Time', DateFormat.yMd().add_jm().format(DateTime.now())),
-            Divider(height: 30, color: theme.dividerColor),
-            Row(
-              children: [
-                Expanded(flex: 5, child: Text('ITEM', style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold))),
-                Expanded(flex: 1, child: Text('QTY', textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold))),
-                Expanded(flex: 2, child: Text('PRICE', textAlign: TextAlign.right, style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold))),
-              ],
-            ),
-            Divider(color: theme.dividerColor.withOpacity(0.5)),
-            ...itemsToDisplay.map((item) {
-              final String name = item['name'] as String;
-              final int qty = item['qty'] as int;
-              final double price = item['price'] as double;
-              final String options = item['options'] as String? ?? '';
-
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(flex: 5, child: Text(name, style: TextStyle(color: theme.textColor))),
-                        Expanded(flex: 1, child: Text(qty.toString(), textAlign: TextAlign.center, style: TextStyle(color: theme.textColor))),
-                        Expanded(flex: 2, child: Text(formatter.format(price * qty), textAlign: TextAlign.right, style: TextStyle(color: theme.textColor))),
-                      ],
-                    ),
-                    if (options.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 12.0, top: 2.0),
-                        child: Text(options, style: TextStyle(color: theme.textColor.withOpacity(0.8), fontSize: 12)),
-                      )
-                  ],
-                ),
-              );
-            }),
-            Divider(height: 20, color: theme.dividerColor),
-            _buildSummaryRow(theme, 'Subtotal', formatter.format(subtotal)),
-            if (staffDiscount > 0) _buildSummaryRow(theme, 'Staff Discount', '- ${formatter.format(staffDiscount)}'),
-            if (couponDiscount > 0) _buildSummaryRow(theme, 'Coupon Discount', '- ${formatter.format(couponDiscount)}'), // <--- NEW ROW
-            Divider(color: theme.dividerColor.withOpacity(0.5)),
-            ...calculatedCharges.entries.map((entry) => _buildSummaryRow(theme, entry.key, formatter.format(entry.value))),
-            Divider(thickness: 1.5, height: 20, color: theme.dividerColor),
-            _buildSummaryRow(theme, 'GRAND TOTAL', formatter.format(total), isTotal: true),
-            if (paymentMethod != null) ...[
-              const Divider(thickness: 1.5, height: 20),
-              _buildSummaryRow(theme, 'Paid By', paymentMethod!),
-            ],
-            Divider(thickness: 1.5, height: 20, color: theme.dividerColor),
-
-            Text(footer, textAlign: TextAlign.center, style: TextStyle(color: theme.textColor, fontStyle: FontStyle.italic)),
-            const SizedBox(height: 20),
-            Text('Managed with DineFlow', textAlign: TextAlign.center, style: TextStyle(color: theme.dividerColor, fontSize: 12)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSummaryRow(BillTheme theme, String label, String value, {bool isTotal = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(color: theme.textColor, fontWeight: isTotal ? FontWeight.bold : FontWeight.normal, fontSize: isTotal ? 16 : 14)),
-          Text(value, style: TextStyle(color: isTotal ? theme.accentColor : theme.textColor, fontWeight: isTotal ? FontWeight.bold : FontWeight.normal, fontSize: isTotal ? 16 : 14)),
-        ],
-      ),
     );
   }
 }
