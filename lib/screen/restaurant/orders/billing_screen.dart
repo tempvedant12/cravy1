@@ -591,35 +591,34 @@ class _BillingScreenState extends State<BillingScreen> {
       List<DocumentSnapshot> sessionOrders,
       double discountPercentage,
       String? couponCode,
-      double couponDiscount, // NEW: Coupon discount amount
-      Map<String, double> finalCharges, // NEW: Final charges map
+      double couponDiscount,
+      Map<String, double> finalCharges,
       ) {
     showDialog(
       context: context,
       builder: (dialogContext) => _PaymentMethodDialog(
         grandTotal: grandTotal,
         onConfirm: (paymentMethod) async {
-          Navigator.of(dialogContext).pop();
+          Navigator.of(dialogContext).pop(); // Close payment dialog
           await _markOrderAsPaid(
             sessionOrders,
             discountPercentage,
             couponCode,
-            couponDiscount, // Pass coupon discount amount
+            couponDiscount,
             paymentMethod,
             grandTotal,
-            finalCharges, // Pass the final charges map
+            finalCharges,
           );
+
+          // ✨ NEW: Call the global print function and then pop the billing screen
           if (mounted) {
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(
-                builder: (context) => BillTemplateScreen(
-                  restaurantId: widget.restaurantId,
-                  sessionKey: widget.sessionKey,
-                  grandTotal: grandTotal,
-                  paymentMethod: paymentMethod,
-                ),
-              ),
+            await showPrintedBill(
+              context: context,
+              restaurantId: widget.restaurantId,
+              sessionKey: widget.sessionKey,
+              paymentMethod: paymentMethod,
             );
+            Navigator.of(context).pop(); // Go back from the billing screen
           }
         },
       ),

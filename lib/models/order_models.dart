@@ -91,7 +91,18 @@ class OrderItem {
   }
 
   factory OrderItem.fromMap(Map<String, dynamic> map, List<MenuItem> allMenuItems) {
-    final menuItem = allMenuItems.firstWhere((item) => item.id == map['menuItemId']);
+    final menuItem = allMenuItems.firstWhere(
+            (item) => item.id == map['menuItemId'],
+        orElse: () => MenuItem(
+          id: map['menuItemId'] ?? 'unknown',
+          name: 'Deleted Item',
+          description: 'This item is no longer available',
+          category: 'Unknown',
+          price: (map['price'] as num? ?? 0.0).toDouble(),
+          baseRecipe: [],
+          optionGroups: [],
+          type: 'none',
+        ));
     final options = (map['selectedOptions'] as List<dynamic>? ?? [])
         .map((opt) => SelectedOption.fromMap(opt))
         .toList();

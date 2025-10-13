@@ -789,7 +789,7 @@ class _QuickBillScreenState extends State<QuickBillScreen>
       builder: (dialogContext) => _PaymentMethodDialog(
         grandTotal: grandTotal,
         onConfirm: (paymentMethod) async {
-          Navigator.of(dialogContext).pop();
+          Navigator.of(dialogContext).pop(); // Close payment dialog
           final sessionKey = await _createOrder(
             discountPercentage,
             couponCode,
@@ -798,18 +798,17 @@ class _QuickBillScreenState extends State<QuickBillScreen>
             grandTotal,
             finalCharges,
           );
+
+          // ✨ NEW: Call the global print function
           if (mounted) {
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(
-                builder: (context) => BillTemplateScreen(
-                  restaurantId: widget.restaurantId,
-                  sessionKey: sessionKey,
-                  grandTotal: grandTotal,
-                  paymentMethod: paymentMethod,
-                ),
-              ),
+            await showPrintedBill(
+              context: context,
+              restaurantId: widget.restaurantId,
+              sessionKey: sessionKey,
+              paymentMethod: paymentMethod,
             );
           }
+          _processFinalBill(); // Clear the screen for the next bill
         },
       ),
     );
@@ -823,64 +822,76 @@ class _QuickBillScreenState extends State<QuickBillScreen>
       double finalTotal,
       Map<String, double> finalCharges,
       ) async {
-    final now = DateTime.now();
-    final startOfDay = DateTime(now.year, now.month, now.day);
-    final endOfDay = startOfDay.add(const Duration(days: 1));
-    final paidOrdersTodaySnapshot = await FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId)
-        .collection('orders')
-        .where('isPaid', isEqualTo: true)
-        .where('billingDetails.billedAt', isGreaterThanOrEqualTo: startOfDay)
-        .where('billingDetails.billedAt', isLessThan: endOfDay)
-        .get();
-    final newOrderCount = paidOrdersTodaySnapshot.docs.length + 1;
-    final formattedOrderCount = newOrderCount.toString().padLeft(2, '0');
-    final formattedDate = DateFormat('ddMMyyyy').format(now);
-    final newBillNumber = '$formattedOrderCount$formattedDate';
 
-    final itemsForFirestore = _selectedItems.values.map((item) {
-      return {
+    final restaurantRef = FirebaseFirestore.instance.collection('restaurants').doc(widget.restaurantId);
+    String newBillNumber = '';
+    String sessionKey = '';
+
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+      final restaurantDoc = await transaction.get(restaurantRef);
+      final restaurantData = restaurantDoc.data() as Map<String, dynamic>?;
+
+      int currentBillCount;
+
+      // ✨ FIX: Check if the counter field exists.
+      if (restaurantData != null && restaurantData.containsKey('totalBillCount')) {
+        // If it exists, use it.
+        currentBillCount = restaurantData['totalBillCount'];
+      } else {
+        // If not, count previous paid orders to initialize.
+        final paidOrdersSnapshot = await restaurantRef
+            .collection('orders')
+            .where('isPaid', isEqualTo: true)
+            .get();
+        currentBillCount = paidOrdersSnapshot.docs.length;
+      }
+
+      newBillNumber = (currentBillCount + 1).toString().padLeft(4, '0');
+
+      // Increment the bill count.
+      transaction.update(restaurantRef, {'totalBillCount': currentBillCount + 1});
+
+      // Create the new order document.
+      final newOrderRef = restaurantRef.collection('orders').doc();
+      sessionKey = 'QuickBill-$newBillNumber';
+
+      final itemsForFirestore = _selectedItems.values.map((item) => {
         'menuItemId': item.menuItem.id,
         'name': item.menuItem.name,
         'price': item.menuItem.price,
         'quantity': item.quantity,
         'status': 'Completed',
         'selectedOptions': item.selectedOptions.map((o) => o.toMap()).toList(),
-      };
-    }).toList();
+      }).toList();
 
-    final chargesList = finalCharges.entries
-        .map((e) => {'label': e.key, 'amount': e.value})
-        .toList();
-    final sessionKey = 'QuickBill-$newBillNumber';
-    await FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId)
-        .collection('orders')
-        .add({
-      'orderType': _orderType,
-      'sessionKey': sessionKey,
-      'items': itemsForFirestore,
-      'totalAmount': finalTotal,
-      'status': 'Completed',
-      'isPaid': true,
-      'isSessionActive': false,
-      'createdAt': FieldValue.serverTimestamp(),
-      'customers': _customers.map((c) => c.toMap()).toList(),
-      'deliveryAddress':
-      _orderType == 'Delivery' ? _addressController.text.trim() : null,
-      'billingDetails': {
-        'billNumber': newBillNumber,
-        'discount': discountPercentage,
-        'couponCode': couponCode,
-        'couponDiscount': couponDiscount,
-        'finalTotal': finalTotal,
-        'paymentMethod': paymentMethod,
-        'billedAt': FieldValue.serverTimestamp(),
-        'appliedCharges': chargesList,
-      }
+      final chargesList = finalCharges.entries
+          .map((e) => {'label': e.key, 'amount': e.value})
+          .toList();
+
+      transaction.set(newOrderRef, {
+        'orderType': _orderType,
+        'sessionKey': sessionKey,
+        'items': itemsForFirestore,
+        'totalAmount': finalTotal,
+        'status': 'Completed',
+        'isPaid': true,
+        'isSessionActive': false,
+        'createdAt': FieldValue.serverTimestamp(),
+        'customers': _customers.map((c) => c.toMap()).toList(),
+        'deliveryAddress': _orderType == 'Delivery' ? _addressController.text.trim() : null,
+        'billingDetails': {
+          'billNumber': newBillNumber,
+          'discount': discountPercentage,
+          'couponCode': couponCode,
+          'couponDiscount': couponDiscount,
+          'finalTotal': finalTotal,
+          'paymentMethod': paymentMethod,
+          'billedAt': FieldValue.serverTimestamp(),
+          'appliedCharges': chargesList,
+        }
+      });
     });
+
     return sessionKey;
   }
 

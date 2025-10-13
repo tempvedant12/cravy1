@@ -15,7 +15,8 @@ class MenuDisplayItem {
   final String menuName;
   final String menuId;
 
-  MenuDisplayItem({required this.item, required this.menuName, required this.menuId});
+  MenuDisplayItem(
+      {required this.item, required this.menuName, required this.menuId});
 
   // Proxy getters for convenience
   String get id => item.id;
@@ -43,7 +44,8 @@ class SelectMenuItemsScreen extends StatefulWidget {
   State<SelectMenuItemsScreen> createState() => _SelectMenuItemsScreenState();
 }
 
-class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen> with TickerProviderStateMixin {
+class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen>
+    with TickerProviderStateMixin {
   final Map<String, OrderItem> _selectedItems = {};
   String? _selectedMenuId;
   String? _selectedMenuName;
@@ -70,13 +72,25 @@ class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen> with Tick
     });
   }
 
+  void _removeItem(MenuItem item) {
+    final uniqueId = OrderItem.generateUniqueId(item, []);
+    setState(() {
+      if (_selectedItems.containsKey(uniqueId)) {
+        _selectedItems[uniqueId]!.quantity--;
+        if (_selectedItems[uniqueId]!.quantity <= 0) {
+          _selectedItems.remove(uniqueId);
+        }
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     // Define the AppBar content for calculation and use
     final PreferredSizeWidget mainAppBar = AppBar(
       title: Text(_selectedMenuName ?? 'Select Items'),
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor.withOpacity(0.85),
+      backgroundColor:
+      Theme.of(context).scaffoldBackgroundColor.withOpacity(0.85),
       elevation: 0,
       bottom: const TabBar(
         tabs: [
@@ -87,11 +101,13 @@ class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen> with Tick
     );
 
     // Calculate the required top padding: Status bar height + AppBar's preferred size (which includes the primary TabBar)
-    final double requiredPadding = mainAppBar.preferredSize.height + MediaQuery.of(context).padding.top;
+    final double requiredPadding =
+        mainAppBar.preferredSize.height + MediaQuery.of(context).padding.top;
 
     return DefaultTabController(
       length: 2,
-      child: Stack( // <--- ADDED Stack
+      child: Stack(
+        // <--- ADDED Stack
         children: [
           const _StaticBackground(), // <--- ADDED Background
           Scaffold(
@@ -106,15 +122,18 @@ class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen> with Tick
                   padding: EdgeInsets.only(top: requiredPadding), // <--- MODIFIED
                   child: TabBarView(
                     children: [
-                      _selectedMenuId != null ?
-                      _MenuContent(
-                        key: ValueKey(_selectedMenuId), // This is the crucial part
+                      _selectedMenuId != null
+                          ? _MenuContent(
+                        key: ValueKey(
+                            _selectedMenuId), // This is the crucial part
                         restaurantId: widget.restaurantId,
                         selectedMenuId: _selectedMenuId!,
                         menus: _allMenus, // <--- MODIFIED: Pass the menus list
                         onItemSelected: _addItem,
                         selectedItems: _selectedItems,
-                      ) : const Center(child: CircularProgressIndicator()),
+                        onRemoveOne: _removeItem,
+                      )
+                          : const Center(child: CircularProgressIndicator()),
                       _SelectedItemsList(
                         selectedItems: _selectedItems.values.toList(),
                         onQuantityChanged: _updateQuantity,
@@ -176,7 +195,8 @@ class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen> with Tick
                       children: [
                         if (menus.length > 1)
                           Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                            padding:
+                            const EdgeInsets.symmetric(horizontal: 4.0),
                             child: ChoiceChip(
                               label: const Text('All Menus'),
                               selected: _selectedMenuId == 'ALL_MENUS',
@@ -192,7 +212,8 @@ class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen> with Tick
                           ),
                         ...menus.map((doc) {
                           return Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                            padding:
+                            const EdgeInsets.symmetric(horizontal: 4.0),
                             child: ChoiceChip(
                               label: Text(doc['name']),
                               selected: _selectedMenuId == doc.id,
@@ -219,11 +240,11 @@ class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen> with Tick
     );
   }
 
-
   Widget _buildConfirmationPanel() {
     final theme = Theme.of(context);
     final hasSelection = _selectedItems.isNotEmpty;
-    final totalItemCount = _selectedItems.values.fold(0, (sum, item) => sum + item.quantity);
+    final totalItemCount =
+    _selectedItems.values.fold(0, (sum, item) => sum + item.quantity);
     return AnimatedSlide(
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
@@ -235,12 +256,14 @@ class _SelectMenuItemsScreenState extends State<SelectMenuItemsScreen> with Tick
             padding: const EdgeInsets.all(16.0),
             decoration: BoxDecoration(
               color: theme.scaffoldBackgroundColor.withOpacity(0.8),
-              border: Border(top: BorderSide(color: theme.dividerColor, width: 1.5)),
+              border:
+              Border(top: BorderSide(color: theme.dividerColor, width: 1.5)),
             ),
             child: SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () => Navigator.of(context).pop(_selectedItems.values.toList()),
+                onPressed: () =>
+                    Navigator.of(context).pop(_selectedItems.values.toList()),
                 icon: const Icon(Icons.check),
                 label: Text('Add $totalItemCount Items'),
                 style: ElevatedButton.styleFrom(
@@ -259,8 +282,8 @@ class _MenuContent extends StatefulWidget {
   final String selectedMenuId;
   final List<DocumentSnapshot> menus; // <--- Correctly defined
   final Function(OrderItem) onItemSelected;
+  final Function(MenuItem) onRemoveOne;
   final Map<String, OrderItem> selectedItems;
-
 
   const _MenuContent({
     super.key,
@@ -268,6 +291,7 @@ class _MenuContent extends StatefulWidget {
     required this.selectedMenuId,
     required this.menus, // <--- Correctly defined
     required this.onItemSelected,
+    required this.onRemoveOne,
     required this.selectedItems,
   });
 
@@ -275,8 +299,8 @@ class _MenuContent extends StatefulWidget {
   State<_MenuContent> createState() => _MenuContentState();
 }
 
-
-class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixin {
+class _MenuContentState extends State<_MenuContent>
+    with TickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   Timer? _debounce;
@@ -286,7 +310,6 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
   List<StreamSubscription> _allMenuSubscriptions = [];
   StreamSubscription? _inventorySubscription;
   StreamSubscription? _menuSubscription;
-
 
   @override
   void initState() {
@@ -354,7 +377,8 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
       }
       latestInventory = inventoryMap;
 
-      final List<dynamic> combinedItems = allMenuCurrentItems.values.expand((i) => i).toList();
+      final List<dynamic> combinedItems =
+      allMenuCurrentItems.values.expand((i) => i).toList();
       updateStream(combinedItems);
     });
 
@@ -373,26 +397,30 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
             .orderBy('name')
             .snapshots()
             .listen((snapshot) {
-          allMenuCurrentItems[currentMenuId] = snapshot.docs.map((d) =>
-              MenuDisplayItem(
-                  item: MenuItem.fromFirestore(d),
-                  menuName: currentMenuName,
-                  menuId: currentMenuId
-              )).toList();
-          final List<dynamic> combinedItems = allMenuCurrentItems.values.expand((i) => i).toList();
+          allMenuCurrentItems[currentMenuId] = snapshot.docs
+              .map((d) => MenuDisplayItem(
+              item: MenuItem.fromFirestore(d),
+              menuName: currentMenuName,
+              menuId: currentMenuId))
+              .toList();
+          final List<dynamic> combinedItems =
+          allMenuCurrentItems.values.expand((i) => i).toList();
           updateStream(combinedItems);
         });
         _allMenuSubscriptions.add(sub);
       }
       controller.onCancel = () {
         _inventorySubscription?.cancel();
-        for(var sub in _allMenuSubscriptions) { sub.cancel(); }
+        for (var sub in _allMenuSubscriptions) {
+          sub.cancel();
+        }
         _allMenuSubscriptions.clear();
       };
       // -----------------------------------------------------------------------
     } else {
       // --- MODIFIED: Safely get the single menu name ---
-      final menuDoc = widget.menus.firstWhere((d) => d.id == menuId, orElse: () => throw Exception('Menu document not found'));
+      final menuDoc = widget.menus.firstWhere((d) => d.id == menuId,
+          orElse: () => throw Exception('Menu document not found'));
       final String singleMenuName = menuDoc['name'];
 
       _menuSubscription = FirebaseFirestore.instance
@@ -405,12 +433,12 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
           .orderBy('name')
           .snapshots()
           .listen((snapshot) {
-        final List<MenuDisplayItem> singleMenu = snapshot.docs.map((doc) =>
-            MenuDisplayItem(
-                item: MenuItem.fromFirestore(doc),
-                menuName: singleMenuName,
-                menuId: menuId
-            )).toList();
+        final List<MenuDisplayItem> singleMenu = snapshot.docs
+            .map((doc) => MenuDisplayItem(
+            item: MenuItem.fromFirestore(doc),
+            menuName: singleMenuName,
+            menuId: menuId))
+            .toList();
         allMenuCurrentItems[menuId] = singleMenu;
         updateStream(singleMenu);
       });
@@ -421,7 +449,6 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
     }
     return controller.stream;
   }
-
 
   @override
   void dispose() {
@@ -448,29 +475,41 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
     });
   }
 
-  void _handleItemTap(MenuDisplayItem item, int availableQuantity, Map<String, double> inventoryLevels) async {
+  void _handleItemTap(MenuDisplayItem item, int availableQuantity,
+      Map<String, double> inventoryLevels) async {
     if (availableQuantity <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This item is out of stock.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('This item is out of stock.')));
       return;
     }
     if (item.optionGroups.isEmpty) {
-      widget.onItemSelected(OrderItem(menuItem: item.item, selectedOptions: [], quantity: 1, menuName: item.menuName));
+      widget.onItemSelected(OrderItem(
+          menuItem: item.item,
+          selectedOptions: [],
+          quantity: 1,
+          menuName: item.menuName));
     } else {
       final List<SelectedOption>? selectedOptions = await showDialog(
         context: context,
         builder: (_) => _CustomizeItemDialog(
           menuItem: item.item,
-          inventoryLevels: _getRemainingInventoryForOptions(inventoryLevels), // <--- MODIFIED: Pass remaining inventory
+          inventoryLevels: _getRemainingInventoryForOptions(
+              inventoryLevels), // <--- MODIFIED: Pass remaining inventory
         ),
       );
       if (selectedOptions != null) {
-        widget.onItemSelected(OrderItem(menuItem: item.item, selectedOptions: selectedOptions, quantity: 1, menuName: item.menuName));
+        widget.onItemSelected(OrderItem(
+            menuItem: item.item,
+            selectedOptions: selectedOptions,
+            quantity: 1,
+            menuName: item.menuName));
       }
     }
   }
 
   // --- NEW HELPER: Calculate committed inventory from items already in cart ---
-  Map<String, double> _getCommittedInventory(Map<String, OrderItem> selectedItems) {
+  Map<String, double> _getCommittedInventory(
+      Map<String, OrderItem> selectedItems) {
     final Map<String, double> committed = {};
 
     for (var item in selectedItems.values) {
@@ -500,7 +539,8 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
   // ---------------------------------------------------------------------------
 
   // --- NEW HELPER: Calculate remaining inventory for the Option Dialog ---
-  Map<String, double> _getRemainingInventoryForOptions(Map<String, double> inventoryLevels) {
+  Map<String, double> _getRemainingInventoryForOptions(
+      Map<String, double> inventoryLevels) {
     final committed = _getCommittedInventory(widget.selectedItems);
     final Map<String, double> remaining = {};
     inventoryLevels.forEach((key, value) {
@@ -510,9 +550,9 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
   }
   // ---------------------------------------------------------------------
 
-
   // --- MODIFIED: Checks remaining inventory after accounting for items already in cart ---
-  int _getAvailableQuantity(MenuDisplayItem item, Map<String, double> inventoryLevels) {
+  int _getAvailableQuantity(
+      MenuDisplayItem item, Map<String, double> inventoryLevels) {
     // 1. Calculate inventory already reserved by items currently in the cart
     final committed = _getCommittedInventory(widget.selectedItems);
 
@@ -533,7 +573,8 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
       if (remainingAvailableQty <= 0) return 0;
 
       // Calculate how many units of the item can be made from this ingredient's remaining stock
-      final possibleFromThisIngredient = (remainingAvailableQty / recipeItem.quantityUsed).floor();
+      final possibleFromThisIngredient =
+      (remainingAvailableQty / recipeItem.quantityUsed).floor();
       maxPossible = min(maxPossible, possibleFromThisIngredient);
     }
     return maxPossible;
@@ -542,21 +583,24 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
 
   void _directAddOne(MenuDisplayItem item) {
     final newItem = OrderItem(
-        menuItem: item.item, selectedOptions: [], quantity: 1, menuName: item.menuName);
+        menuItem: item.item,
+        selectedOptions: [],
+        quantity: 1,
+        menuName: item.menuName);
     widget.onItemSelected(newItem);
   }
 
   void _directRemoveOne(MenuItem item) {
-    // This logic needs to be handled in the parent `_SelectMenuItemsScreenState`
+    widget.onRemoveOne(item);
   }
-
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<MenuData>(
         stream: _menuDataStream,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
@@ -575,7 +619,9 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
           }).toList();
 
           final searchAndTypeFilteredItems = typeFilteredItems.where((item) {
-            return item.name.toLowerCase().contains(_searchQuery.toLowerCase());
+            return item.name
+                .toLowerCase()
+                .contains(_searchQuery.toLowerCase());
           }).toList();
 
           return Column(
@@ -604,12 +650,9 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
               ),
             ],
           );
-        }
-    );
+        });
   }
-
 }
-
 
 class _CategoryTabsView extends StatefulWidget {
   final List<MenuDisplayItem> items;
@@ -637,7 +680,8 @@ class _CategoryTabsView extends StatefulWidget {
   State<_CategoryTabsView> createState() => _CategoryTabsViewState();
 }
 
-class _CategoryTabsViewState extends State<_CategoryTabsView> with TickerProviderStateMixin {
+class _CategoryTabsViewState extends State<_CategoryTabsView>
+    with TickerProviderStateMixin {
   TabController? _categoryTabController;
   List<String> _tabCategories = [];
 
@@ -651,13 +695,15 @@ class _CategoryTabsViewState extends State<_CategoryTabsView> with TickerProvide
   void didUpdateWidget(covariant _CategoryTabsView oldWidget) {
     super.didUpdateWidget(oldWidget);
     // Rebuild tabs if the items passed to this widget have changed
-    if (!listEquals(oldWidget.items.map((e) => e.id).toList(), widget.items.map((e) => e.id).toList())) {
+    if (!listEquals(oldWidget.items.map((e) => e.id).toList(),
+        widget.items.map((e) => e.id).toList())) {
       _updateTabs();
     }
   }
 
   void _updateTabs() {
-    final categories = widget.items.map((item) => item.category).toSet().toList();
+    final categories =
+    widget.items.map((item) => item.category).toSet().toList();
     categories.sort();
     final newTabCategories = ['All', ...categories];
 
@@ -666,7 +712,8 @@ class _CategoryTabsViewState extends State<_CategoryTabsView> with TickerProvide
       setState(() {
         _tabCategories = newTabCategories;
         _categoryTabController?.dispose();
-        _categoryTabController = TabController(length: _tabCategories.length, vsync: this);
+        _categoryTabController =
+            TabController(length: _tabCategories.length, vsync: this);
       });
     }
   }
@@ -699,12 +746,16 @@ class _CategoryTabsViewState extends State<_CategoryTabsView> with TickerProvide
             children: _tabCategories.map((category) {
               final itemsToShow = category == 'All'
                   ? widget.items
-                  : widget.items.where((item) => item.category == category).toList();
+                  : widget.items
+                  .where((item) => item.category == category)
+                  .toList();
               return _MenuItemsGrid(
                 items: itemsToShow,
                 selectedItems: widget.selectedItems,
-                onItemTap: (item, qty) => widget.onItemTap(item, qty, widget.inventoryLevels),
-                getAvailableQuantity: (item) => widget.getAvailableQuantity(item as MenuDisplayItem, widget.inventoryLevels),
+                onItemTap: (item, qty) =>
+                    widget.onItemTap(item, qty, widget.inventoryLevels),
+                getAvailableQuantity: (item) => widget.getAvailableQuantity(
+                    item as MenuDisplayItem, widget.inventoryLevels),
                 onAddOne: widget.onAddOne,
                 onRemoveOne: widget.onRemoveOne,
                 showMenuTag: widget.showMenuTag,
@@ -716,7 +767,6 @@ class _CategoryTabsViewState extends State<_CategoryTabsView> with TickerProvide
     );
   }
 }
-
 
 class _MenuItemsGrid extends StatelessWidget {
   final List<MenuDisplayItem> items;
@@ -761,8 +811,10 @@ class _MenuItemsGrid extends StatelessWidget {
           onTap: () => onItemTap(itemDisplay, availableQty),
           availableQuantity: availableQty,
           selectedQuantity: selectedQty,
-          onAddOne: itemDisplay.item.optionGroups.isEmpty ? () => onAddOne(itemDisplay) : null,
-          onRemoveOne: itemDisplay.item.optionGroups.isEmpty ? () => onRemoveOne(itemDisplay.item) : null,
+          onAddOne:
+          itemDisplay.item.optionGroups.isEmpty ? () => onAddOne(itemDisplay) : null,
+          onRemoveOne:
+          itemDisplay.item.optionGroups.isEmpty ? () => onRemoveOne(itemDisplay.item) : null,
         );
       },
     );
@@ -778,7 +830,6 @@ class SelectableItemCard extends StatelessWidget {
   final VoidCallback? onRemoveOne;
   final String menuName;
   final bool showMenuTag;
-
 
   const SelectableItemCard(
       {super.key,
@@ -796,8 +847,10 @@ class SelectableItemCard extends StatelessWidget {
     final theme = Theme.of(context);
     final isAvailable = availableQuantity > 0;
     final actionText = item.optionGroups.isEmpty ? 'Add' : 'Customize';
-    final showQuantityControls = selectedQuantity > 0 && item.optionGroups.isEmpty;
-    final showCustomizedCounter = selectedQuantity > 0 && item.optionGroups.isNotEmpty;
+    final showQuantityControls =
+        selectedQuantity > 0 && item.optionGroups.isEmpty;
+    final showCustomizedCounter =
+        selectedQuantity > 0 && item.optionGroups.isNotEmpty;
     final typeColor = item.type == 'veg'
         ? Colors.green
         : item.type == 'non-veg'
@@ -831,7 +884,10 @@ class SelectableItemCard extends StatelessWidget {
                           children: [
                             if (showMenuTag)
                               Chip(
-                                label: Text(menuName, style: theme.textTheme.bodySmall?.copyWith(fontSize: 10, fontWeight: FontWeight.bold)),
+                                label: Text(menuName,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold)),
                                 visualDensity: VisualDensity.compact,
                                 padding: EdgeInsets.zero,
                               ),
@@ -882,10 +938,12 @@ class SelectableItemCard extends StatelessWidget {
                             ),
                             Text(
                               selectedQuantity.toString(),
-                              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                              style: theme.textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.bold),
                             ),
                             IconButton(
-                              icon: Icon(Icons.add_circle_outline, color: theme.primaryColor),
+                              icon: Icon(Icons.add_circle_outline,
+                                  color: theme.primaryColor),
                               iconSize: 24,
                               onPressed: onAddOne,
                             ),
@@ -907,14 +965,17 @@ class SelectableItemCard extends StatelessWidget {
                             if (showCustomizedCounter) ...[
                               const SizedBox(width: 8),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 2),
                                 decoration: BoxDecoration(
                                   color: theme.primaryColor,
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Text(
                                   '${selectedQuantity}x',
-                                  style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onPrimary, fontWeight: FontWeight.bold),
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.onPrimary,
+                                      fontWeight: FontWeight.bold),
                                 ),
                               )
                             ]
@@ -1028,7 +1089,8 @@ class _CustomizeItemDialogState extends State<_CustomizeItemDialog> {
 
   // Helper to check if a recipe link is available based on remaining inventory
   bool _isOptionAvailable(RecipeItem recipeLink) {
-    return (widget.inventoryLevels[recipeLink.inventoryItemId] ?? 0) >= recipeLink.quantityUsed;
+    return (widget.inventoryLevels[recipeLink.inventoryItemId] ?? 0) >=
+        recipeLink.quantityUsed;
   }
 
   @override

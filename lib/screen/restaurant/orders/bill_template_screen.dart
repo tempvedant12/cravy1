@@ -1,3 +1,5 @@
+// lib/screen/restaurant/orders/bill_template_screen.dart
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cravy/models/order_models.dart';
 import 'package:cravy/screen/restaurant/billing_setup/bill_design_screen.dart';
@@ -13,6 +15,187 @@ import 'dart:typed_data';
 import '../billing_setup/manage_coupon_screen.dart';
 import 'create_order_screen.dart';
 
+// ====================================================================================
+// NEW PUBLIC PRINTING FUNCTION
+// ====================================================================================
+
+/// Fetches all necessary data, generates a PDF, and shows the print dialog.
+Future<void> showPrintedBill({
+  required BuildContext context,
+  required String restaurantId,
+  required String sessionKey,
+  String? paymentMethod, // Optional: pass if it's a new transaction
+}) async {
+  // Show a loading indicator
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (BuildContext context) {
+      return const Center(child: CircularProgressIndicator());
+    },
+  );
+
+  try {
+    final billData =
+    await _fetchAndPrepareBillData(context, restaurantId, sessionKey);
+
+    // If a new payment method is provided, update the bill data
+    if (paymentMethod != null) {
+      billData['paymentMethod'] = paymentMethod;
+    }
+
+    final pdfData = await compute(generatePdfOnIsolate, billData);
+
+    // Close the loading indicator
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+
+    // Show the print dialog
+    await Printing.layoutPdf(onLayout: (format) async => pdfData);
+  } catch (e) {
+    // Close the loading indicator in case of an error
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+    // Show an error message
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not generate or print bill: $e')),
+      );
+    }
+  }
+}
+
+/// Gathers all the necessary data for the bill.
+Future<Map<String, dynamic>> _fetchAndPrepareBillData(
+    BuildContext context, String restaurantId, String sessionKey) async {
+  final restaurantRef =
+  FirebaseFirestore.instance.collection('restaurants').doc(restaurantId);
+
+  // Fetch the most recent 'billedAt' timestamp in the session
+  final latestBillQuery = await restaurantRef
+      .collection('orders')
+      .where('sessionKey', isEqualTo: sessionKey)
+      .where('isPaid', isEqualTo: true)
+      .orderBy('billingDetails.billedAt', descending: true)
+      .limit(1)
+      .get();
+
+  if (latestBillQuery.docs.isEmpty) {
+    throw Exception('No paid orders found for this session to generate a bill.');
+  }
+  final latestBilledAt = (latestBillQuery.docs.first.data()['billingDetails']
+  as Map<String, dynamic>)['billedAt'];
+
+  // Fetch all orders matching that timestamp
+  final orderDocsSnapshot = await restaurantRef
+      .collection('orders')
+      .where('sessionKey', isEqualTo: sessionKey)
+      .where('billingDetails.billedAt', isEqualTo: latestBilledAt)
+      .get();
+
+  final restaurantDoc = await restaurantRef.get();
+  final configsSnapshot =
+  await restaurantRef.collection('billConfigurations').get();
+  final allMenuItems = await _privateFetchAllMenuItems(restaurantId);
+
+  final restaurantData = restaurantDoc.data() as Map<String, dynamic>? ?? {};
+  final defaultBillConfigId = restaurantData['defaultBillConfigId'] as String?;
+
+  final allConfigs = configsSnapshot.docs
+      .map((doc) => BillConfiguration.fromFirestore(doc))
+      .toList();
+  final selectedConfig = allConfigs.firstWhere((c) => c.id == defaultBillConfigId,
+      orElse: () => allConfigs.isNotEmpty
+          ? allConfigs.first
+          : throw Exception('No bill designs configured.'));
+
+  final orderDocs = orderDocsSnapshot.docs;
+  final firstOrderData = orderDocs.first.data() as Map<String, dynamic>;
+  final billingDetails =
+  (firstOrderData['billingDetails'] as Map<String, dynamic>? ?? {});
+
+  final aggregatedItems = _privateAggregateOrders(orderDocs, allMenuItems).values.toList();
+  final subtotal =
+  aggregatedItems.fold(0.0, (sum, item) => sum + item.totalPrice);
+  final discountPercentage = (billingDetails['discount'] ?? 0.0).toDouble();
+  final staffDiscountAmount = subtotal * discountPercentage;
+  final couponDiscountAmount =
+  (billingDetails['couponDiscount'] ?? 0.0).toDouble();
+  final appliedChargesList =
+      billingDetails['appliedCharges'] as List<dynamic>? ?? [];
+  final calculatedCharges = <String, double>{};
+  for (var chargeMap in appliedChargesList) {
+    if (chargeMap is Map<String, dynamic>) {
+      final label = chargeMap['label'] as String? ?? 'Charge';
+      final amount = (chargeMap['amount'] as num? ?? 0.0).toDouble();
+      calculatedCharges[label] = amount;
+    }
+  }
+  final billItems = aggregatedItems.map((item) {
+    return {
+      'name': item.menuItem.name,
+      'qty': item.quantity,
+      'price': item.singleItemPrice,
+      'options': item.selectedOptions.map((o) => o.optionName).join(', '),
+    };
+  }).toList();
+
+  return {
+    'restaurantName': restaurantData['name'] ?? 'N/A',
+    'restaurantAddress': restaurantData['address'] ?? 'N/A',
+    'phone': selectedConfig.contactPhone,
+    'gst': selectedConfig.gstNumber,
+    'footer': selectedConfig.footerNote,
+    'notes': selectedConfig.billNotes,
+    'template': selectedConfig.template,
+    'paperWidth': selectedConfig.paperWidth,
+    'fontSize': selectedConfig.fontSize,
+    'billItems': billItems,
+    'subtotal': subtotal,
+    'staffDiscount': staffDiscountAmount,
+    'couponDiscount': couponDiscountAmount,
+    'calculatedCharges': calculatedCharges,
+    'total': billingDetails['finalTotal'] ?? 0.0,
+    'billNumber': billingDetails['billNumber'] ?? 'N/A',
+    'sessionKey': sessionKey,
+    'paymentMethod': billingDetails['paymentMethod'] ?? 'N/A',
+    'customers': (firstOrderData['customers'] as List<dynamic>? ?? [])
+        .map((c) => CustomerInfo.fromMap(c as Map<String, dynamic>))
+        .toList(),
+    'orderType': firstOrderData['orderType'] ?? 'Dine-In',
+  };
+}
+
+Future<List<MenuItem>> _privateFetchAllMenuItems(String restaurantId) async {
+  final menusSnapshot = await FirebaseFirestore.instance
+      .collection('restaurants')
+      .doc(restaurantId)
+      .collection('menus')
+      .get();
+  final List<MenuItem> allItems = [];
+  for (var menuDoc in menusSnapshot.docs) {
+    final itemsSnapshot = await menuDoc.reference.collection('items').get();
+    allItems.addAll(
+        itemsSnapshot.docs.map((doc) => MenuItem.fromFirestore(doc)));
+  }
+  return allItems;
+}
+
+Map<String, OrderItem> _privateAggregateOrders(
+    List<QueryDocumentSnapshot> orders, List<MenuItem> allMenuItems) {
+  final aggregatedItems = <String, OrderItem>{};
+  for (var orderDoc in orders) {
+    final orderData = orderDoc.data() as Map<String, dynamic>;
+    final items = List<Map<String, dynamic>>.from(orderData['items'] ?? []);
+    for (var itemMap in items) {
+      final item = OrderItem.fromMap(itemMap, allMenuItems);
+      if (aggregatedItems.containsKey(item.uniqueId)) {
+        aggregatedItems[item.uniqueId]!.quantity += item.quantity;
+      } else {
+        aggregatedItems[item.uniqueId] = item;
+      }
+    }
+  }
+  return aggregatedItems;
+}
 // ====================================================================================
 // PDF GENERATION LOGIC (Now with multiple templates)
 // ====================================================================================
@@ -683,20 +866,36 @@ class _BillTemplateScreenState extends State<BillTemplateScreen> {
   }
 
   Future<Map<String, dynamic>> _fetchBillDetails() async {
-    final restaurantRef = FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId);
+    final restaurantRef = FirebaseFirestore.instance.collection('restaurants').doc(widget.restaurantId);
+
+    // ✨ FIX: Fetch only the orders from the most recent payment transaction
+    // 1. Find the most recent 'billedAt' timestamp in the session.
+    final latestBillQuery = await restaurantRef
+        .collection('orders')
+        .where('sessionKey', isEqualTo: widget.sessionKey)
+        .where('isPaid', isEqualTo: true)
+        .orderBy('billingDetails.billedAt', descending: true)
+        .limit(1)
+        .get();
+
+    if (latestBillQuery.docs.isEmpty) {
+      throw Exception('No paid orders found for this session to generate a bill.');
+    }
+    final latestBilledAt = (latestBillQuery.docs.first.data()['billingDetails'] as Map<String, dynamic>)['billedAt'];
+
+    // 2. Fetch all orders that match that exact timestamp.
+    final orderDocsSnapshotFuture = restaurantRef
+        .collection('orders')
+        .where('sessionKey', isEqualTo: widget.sessionKey)
+        .where('billingDetails.billedAt', isEqualTo: latestBilledAt)
+        .get();
+
 
     final List<Future> futures = [
       restaurantRef.get(),
       restaurantRef.collection('billConfigurations').get(),
       _fetchAllMenuItems(widget.restaurantId),
-      restaurantRef
-          .collection('orders')
-          .where('sessionKey', isEqualTo: widget.sessionKey)
-          .where('isPaid', isEqualTo: true)
-          .limit(1) // Since we only need one to get the billing details
-          .get(),
+      orderDocsSnapshotFuture,
     ];
 
     final results = await Future.wait(futures);

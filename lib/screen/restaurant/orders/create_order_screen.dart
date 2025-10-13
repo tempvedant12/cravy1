@@ -111,8 +111,30 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
       }
       setState(() => _isLoading = true);
 
-      // *** MODIFIED: Use the new mapping function to include baseRecipe/type ***
       final itemsForFirestore = _selectedItems.values.map((item) => _mapItemToFirestore(item)).toList();
+
+      final String sessionKey;
+      if (_orderType == 'Dine-In') {
+        sessionKey = _assignment!.toDisplayString();
+      } else {
+        // ✨ FIX: Generate a simpler sequential daily ID
+        final now = DateTime.now();
+        final startOfDay = DateTime(now.year, now.month, now.day);
+        final endOfDay = startOfDay.add(const Duration(days: 1));
+
+        final query = await FirebaseFirestore.instance
+            .collection('restaurants')
+            .doc(widget.restaurantId)
+            .collection('orders')
+            .where('orderType', isEqualTo: _orderType)
+            .where('createdAt', isGreaterThanOrEqualTo: startOfDay)
+            .where('createdAt', isLessThan: endOfDay)
+            .get();
+
+        final newOrderCount = query.docs.length + 1;
+        sessionKey = '$_orderType#$newOrderCount';
+      }
+
 
       try {
         final inventoryService = InventoryService(restaurantId: widget.restaurantId);
@@ -121,7 +143,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
 
         await FirebaseFirestore.instance.collection('restaurants').doc(widget.restaurantId).collection('orders').add({
           'orderType': _orderType,
-          'sessionKey': _assignment?.toDisplayString() ?? (_customers.isNotEmpty ? _customers.first.name : 'Guest'),
+          'sessionKey': sessionKey,
           'assignment': _assignment?.selections.map((key, value) => MapEntry(key, value.toList())),
           'assignmentLabel': _assignment?.toDisplayString(),
           'tableIds': _assignment?.selections.keys.toList() ?? [],
