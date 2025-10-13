@@ -11,6 +11,7 @@ import 'package:pdf/pdf.dart';
 import 'dart:typed_data';
 
 import '../billing_setup/manage_coupon_screen.dart';
+import 'create_order_screen.dart';
 
 // ====================================================================================
 // PDF GENERATION LOGIC (Now with multiple templates)
@@ -200,7 +201,7 @@ pw.Widget _buildStandardTemplate(
           String itemName = item['name'];
           final String options = item['options'] ?? '';
           if (options.isNotEmpty) {
-            itemName += '\n  └ ${options.replaceAll(', ', '\n  └ ')}';
+            itemName += '\n  - ${options.replaceAll(', ', '\n  - ')}';
           }
           return [
             itemName,
@@ -219,6 +220,7 @@ pw.Widget _buildStandardTemplate(
             "- ${formatter.format(billData['couponDiscount'])}", font, fontSize: baseFontSize),
       for (var entry in (billData['calculatedCharges'] as Map<String, double>).entries)
         _buildSummaryRow(entry.key, formatter.format(entry.value), font, fontSize: baseFontSize),
+      _buildCustomerAndOrderInfo(billData, font, baseFontSize),
       pw.Divider(height: 8, thickness: 1),
       pw.Padding(
         padding: const pw.EdgeInsets.symmetric(vertical: 2),
@@ -297,7 +299,7 @@ pw.Widget _buildCompactTemplate(
           String itemName = item['name'];
           final String options = item['options'] ?? '';
           if (options.isNotEmpty) {
-            itemName += '\n  └ ${options.replaceAll(', ', '\n  └ ')}';
+            itemName += '\n  - ${options.replaceAll(', ', '\n  - ')}';
           }
           return [
             itemName,
@@ -316,6 +318,7 @@ pw.Widget _buildCompactTemplate(
             "- ${formatter.format(billData['couponDiscount'])}", font, fontSize: compactFontSize),
       for (var entry in (billData['calculatedCharges'] as Map<String, double>).entries)
         _buildSummaryRow(entry.key, formatter.format(entry.value), font, fontSize: compactFontSize),
+      _buildCustomerAndOrderInfo(billData, font, baseFontSize),
       pw.Divider(height: 6, thickness: 1),
       _buildSummaryRow('GRAND TOTAL', formatter.format(billData['total']), font,
           fontSize: baseFontSize + 2, fontWeight: pw.FontWeight.bold),
@@ -385,7 +388,7 @@ pw.Widget _buildMinimalistTemplate(
           String itemName = item['name'];
           final String options = item['options'] ?? '';
           if (options.isNotEmpty) {
-            itemName += '\n  └ ${options.replaceAll(', ', '\n  └ ')}';
+            itemName += '\n  - ${options.replaceAll(', ', '\n  - ')}';
           }
           return [
             itemName,
@@ -404,6 +407,7 @@ pw.Widget _buildMinimalistTemplate(
             "- ${formatter.format(billData['couponDiscount'])}", font, fontSize: baseFontSize),
       for (var entry in (billData['calculatedCharges'] as Map<String, double>).entries)
         _buildSummaryRow(entry.key, formatter.format(entry.value), font, fontSize: baseFontSize),
+      _buildCustomerAndOrderInfo(billData, font, baseFontSize),
       pw.SizedBox(height: 8),
       _buildSummaryRow('GRAND TOTAL', formatter.format(billData['total']), font,
           fontSize: baseFontSize + 3, fontWeight: pw.FontWeight.bold),
@@ -476,7 +480,7 @@ pw.Widget _buildDetailedItemsTemplate(
       String itemName = item['name'];
       final String options = item['options'] ?? '';
       if (options.isNotEmpty) {
-        itemName += '\n  └ ${options.replaceAll(', ', '\n  └ ')}';
+        itemName += '\n  - ${options.replaceAll(', ', '\n  - ')}';
       }
       return [
         itemName,
@@ -493,6 +497,26 @@ pw.Widget _buildDetailedItemsTemplate(
   }
 
   return standardTemplate;
+}
+pw.Widget _buildCustomerAndOrderInfo(Map<String, dynamic> billData, pw.Font font, double baseFontSize) {
+  final customers = (billData['customers'] as List<dynamic>? ?? [])
+      .map((c) => CustomerInfo.fromMap(c as Map<String, dynamic>))
+      .toList();
+  final orderType = billData['orderType'] as String?;
+
+  return pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.start,
+    children: [
+      pw.Divider(height: 8, thickness: 1),
+      if (orderType != null)
+        _buildSummaryRow('Order Type', orderType, font, fontSize: baseFontSize),
+      if (customers.isNotEmpty) ...[
+        _buildSummaryRow('Customer', customers.first.name, font, fontSize: baseFontSize),
+        if (customers.first.phone.isNotEmpty)
+          _buildSummaryRow('Phone', customers.first.phone, font, fontSize: baseFontSize),
+      ],
+    ],
+  );
 }
 
 
@@ -532,12 +556,17 @@ class _BillTemplateScreenState extends State<BillTemplateScreen> {
 
   Map<String, dynamic> _gatherBillData(Map<String, dynamic> details) {
     final orderDocs = details['orders'] as List<QueryDocumentSnapshot>;
+    final firstOrderData = orderDocs.first.data() as Map<String, dynamic>;
     final billingDetails =
-        (orderDocs.first.data() as Map<String, dynamic>)['billingDetails']
-        as Map<String, dynamic>? ??
-            {};
+    (firstOrderData['billingDetails']
+    as Map<String, dynamic>? ??
+        {});
 
     final billNumber = billingDetails['billNumber'] ?? orderDocs.first.id.substring(0, 8).toUpperCase();
+    final orderType = firstOrderData['orderType'] ?? 'Dine-In';
+    final customers = (firstOrderData['customers'] as List<dynamic>? ?? [])
+        .map((c) => CustomerInfo.fromMap(c as Map<String, dynamic>))
+        .toList();
 
     final aggregatedItems = _aggregateOrders(orderDocs).values.toList();
     final subtotal =
@@ -581,9 +610,11 @@ class _BillTemplateScreenState extends State<BillTemplateScreen> {
       'couponDiscount': couponDiscountAmount,
       'calculatedCharges': calculatedCharges,
       'total': billingDetails['finalTotal'] ?? widget.grandTotal,
-    'billNumber': billNumber,
+      'billNumber': billNumber,
       'sessionKey': widget.sessionKey,
       'paymentMethod': widget.paymentMethod,
+      'orderType': orderType,
+      'customers': customers.map((c) => c.toMap()).toList(),
     };
   }
 
@@ -655,41 +686,29 @@ class _BillTemplateScreenState extends State<BillTemplateScreen> {
     final restaurantRef = FirebaseFirestore.instance
         .collection('restaurants')
         .doc(widget.restaurantId);
-    final latestPaidOrderSnapshot = await restaurantRef
-        .collection('orders')
-        .where('sessionKey', isEqualTo: widget.sessionKey)
-        .where('isPaid', isEqualTo: true)
-        .orderBy('billingDetails.billedAt', descending: true)
-        .limit(1)
-        .get();
-    Timestamp? latestBilledAt;
-    if (latestPaidOrderSnapshot.docs.isNotEmpty) {
-      latestBilledAt = (latestPaidOrderSnapshot.docs.first.data()
-      as Map<String, dynamic>)['billingDetails']['billedAt']
-      as Timestamp?;
-    }
+
     final List<Future> futures = [
       restaurantRef.get(),
       restaurantRef.collection('billConfigurations').get(),
       _fetchAllMenuItems(widget.restaurantId),
+      restaurantRef
+          .collection('orders')
+          .where('sessionKey', isEqualTo: widget.sessionKey)
+          .where('isPaid', isEqualTo: true)
+          .limit(1) // Since we only need one to get the billing details
+          .get(),
     ];
-    Query orderQuery = restaurantRef
-        .collection('orders')
-        .where('sessionKey', isEqualTo: widget.sessionKey)
-        .where('isPaid', isEqualTo: true);
-    if (latestBilledAt != null) {
-      orderQuery = orderQuery.where('billingDetails.billedAt',
-          isEqualTo: latestBilledAt);
-    }
-    futures.add(orderQuery.get());
+
     final results = await Future.wait(futures);
     final restaurantDoc = results[0] as DocumentSnapshot;
     final configsSnapshot = results[1] as QuerySnapshot;
     _allMenuItems = results[2] as List<MenuItem>;
     final orderDocsSnapshot = results[3] as QuerySnapshot;
+
     final restaurantData = restaurantDoc.data() as Map<String, dynamic>? ?? {};
     final defaultBillConfigId =
     restaurantData['defaultBillConfigId'] as String?;
+
     CouponModel? coupon;
     final orderDocs = orderDocsSnapshot.docs;
     if (orderDocs.isNotEmpty) {
@@ -708,6 +727,7 @@ class _BillTemplateScreenState extends State<BillTemplateScreen> {
         }
       }
     }
+
     final allConfigs = configsSnapshot.docs
         .map((doc) => BillConfiguration.fromFirestore(doc))
         .toList();

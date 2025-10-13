@@ -39,6 +39,15 @@ class RecipeItem {
       'unit': unit,
     };
   }
+
+  static RecipeItem empty() {
+    return RecipeItem(
+      inventoryItemId: '',
+      name: '',
+      quantityUsed: 0.0,
+      unit: '',
+    );
+  }
 }
 
 class OptionItem {
@@ -104,6 +113,7 @@ class OptionGroup {
 
 class MenuItem {
   final String id;
+  String menuId; // <-- ADDED
   final String name;
   final String description;
   final String category;
@@ -114,6 +124,7 @@ class MenuItem {
 
   MenuItem({
     required this.id,
+    this.menuId = '', // <-- ADDED
     required this.name,
     required this.description,
     required this.category,
@@ -721,7 +732,7 @@ class MenuItemCard extends StatelessWidget {
                         onPressed: onDelete,
                         tooltip: 'Delete Item',
                         padding: EdgeInsets.zero,
-                        constraints: BoxConstraints(minWidth: 40, minHeight: 40),
+                        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
                       ),
                     ],
                   ),

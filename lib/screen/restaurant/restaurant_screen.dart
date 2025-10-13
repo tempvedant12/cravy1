@@ -3,7 +3,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cravy/screen/restaurant/inventory/inventory_screen.dart';
 import 'package:cravy/screen/restaurant/kitchen/kitchen_screen.dart';
 import 'package:cravy/screen/restaurant/orders/orders_screen.dart';
+import 'package:cravy/screen/restaurant/quick_bill/quick_bill_screen.dart';
 import 'package:cravy/screen/restaurant/reports/reports_screen.dart';
+import 'package:cravy/screen/restaurant/staff/staff_and_roles_screen.dart';
 import 'package:cravy/screen/restaurant/suppliers/suppliers_screen.dart'; // Import the new screen
 import 'package:cravy/screen/restaurant/tables_and_reservations/tables_and_reservations_screen.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +13,7 @@ import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 
 import 'EditRestaurantScreen.dart';
 import 'billing_setup/billing_setup_and_coupons.dart';
+import 'customers/customers_screen.dart';
 import 'menu/menu_screen.dart';
 import 'reports/payment_history_screen.dart';
 
@@ -126,6 +129,7 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> {
     });
 
     return [
+      DashboardItem(title: 'Quick Bill', icon: Icons.flash_on, screen: QuickBillScreen(restaurantId: widget.restaurant.id)),
       DashboardItem(title: 'Tables & Reservations', icon: Icons.table_restaurant_outlined, screen: TablesAndReservationsScreen(restaurantId: widget.restaurant.id)),
       DashboardItem(title: 'Orders & Billing', icon: Icons.receipt_long_outlined, screen: OrdersScreen(restaurantId: widget.restaurant.id,)),
       DashboardItem(title: 'Menu', icon: Icons.menu_book_outlined, screen: MenuScreen(restaurantId: widget.restaurant.id)),
@@ -138,8 +142,8 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> {
       ),
       DashboardItem(title: 'Billing Setup & Coupons', icon: Icons.folder_outlined, screen: BillingSetupAndCouponsScreen(restaurantId: widget.restaurant.id)),
       DashboardItem(title: 'Payment History', icon: Icons.history_outlined, screen: PaymentHistoryScreen(restaurantId: widget.restaurant.id)),
-      DashboardItem(title: 'Staff & Roles', icon: Icons.people_alt_outlined, screen: const PlaceholderScreen(tabName: 'Staff / Roles')),
-      DashboardItem(title: 'Customers', icon: Icons.people_outline, screen: const PlaceholderScreen(tabName: 'Customer Details')),
+      DashboardItem(title: 'Staff & Roles', icon: Icons.people_alt_outlined, screen: StaffAndRolesScreen(restaurantId: widget.restaurant.id)),
+      DashboardItem(title: 'Customers', icon: Icons.people_outline, screen: CustomersScreen(restaurantId: widget.restaurant.id)),
       DashboardItem(title: 'Suppliers', icon: Icons.local_shipping_outlined, screen: SuppliersScreen(restaurantId: widget.restaurant.id)), // Add the new screen here
       DashboardItem(title: 'Reports', icon: Icons.bar_chart_outlined, screen: ReportsScreen(restaurantId: widget.restaurant.id)),
       DashboardItem(title: 'Activity Log', icon: Icons.history_outlined, screen: const PlaceholderScreen(tabName: 'Activity Log')),

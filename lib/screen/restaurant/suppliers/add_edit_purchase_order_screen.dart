@@ -76,6 +76,8 @@ class _AddEditPurchaseOrderScreenState
     setState(() {
       _totalAmount =
           _items.fold(0.0, (sum, item) => sum + (item.quantity * item.price));
+      _amountPaidController.text = _totalAmount.toString();
+      _amountPaid = _totalAmount;
       _updatePaymentStatus();
     });
   }
@@ -192,8 +194,6 @@ class _AddEditPurchaseOrderScreenState
           _items.add(result);
         }
         _calculateTotal();
-        _amountPaidController.text = _totalAmount.toString();
-        _amountPaid = _totalAmount;
         _updatePaymentStatus();
       });
     }
@@ -203,8 +203,6 @@ class _AddEditPurchaseOrderScreenState
     setState(() {
       _items.removeAt(index);
       _calculateTotal();
-      _amountPaidController.text = _totalAmount.toString();
-      _amountPaid = _totalAmount;
       _updatePaymentStatus();
     });
   }
@@ -311,8 +309,11 @@ class _AddEditPurchaseOrderScreenState
                         ),
                         keyboardType: TextInputType.number,
                         onChanged: (value) {
-                          _amountPaid = double.tryParse(value) ?? 0.0;
-                          _updatePaymentStatus();
+                          setState(() {
+                            _amountPaid = double.tryParse(value) ?? 0.0;
+                            _totalAmount = _amountPaid;
+                            _updatePaymentStatus();
+                          });
                         },
                         onSaved: (value) {
                           _amountPaid = double.tryParse(value ?? '0.0') ?? 0.0;
@@ -659,7 +660,8 @@ class _StaticBackground extends StatelessWidget {
             bottom: -150,
             right: -200,
             child: _buildShape(
-                theme.colorScheme.surface.withOpacity(isDark ? 0.3 : 0.2), 450),
+                theme.colorScheme.surface.withOpacity(isDark ? 0.3 : 0.2),
+                450),
           ),
         ],
       ),

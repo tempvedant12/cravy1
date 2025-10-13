@@ -53,18 +53,18 @@ class OrderItem {
     this.quantity = 1,
     required this.selectedOptions,
     required this.menuName,
-  }) : uniqueId = _generateUniqueId(menuItem.id, selectedOptions);
+  }) : uniqueId = generateUniqueId(menuItem, selectedOptions);
 
   // Generates a consistent ID based on the menu item and its selected options
-  static String _generateUniqueId(String menuItemId, List<SelectedOption> options) {
+  static String generateUniqueId(MenuItem menuItem, List<SelectedOption> options) {
     if (options.isEmpty) {
-      return menuItemId;
+      return menuItem.id;
     }
     // Sort options by name to ensure the ID is the same regardless of selection order
     final sortedOptions = List<SelectedOption>.from(options)
       ..sort((a, b) => a.optionName.compareTo(b.optionName));
     final optionsId = sortedOptions.map((o) => o.optionName).join(',');
-    return '$menuItemId-[$optionsId]';
+    return '${menuItem.id}-[$optionsId]';
   }
 
   // Calculates the total price for this item (base price + options) * quantity
@@ -101,6 +101,23 @@ class OrderItem {
       quantity: map['quantity'] ?? 1,
       selectedOptions: options,
       menuName: map['menuName'] ?? '',
+    );
+  }
+  static OrderItem empty() {
+    return OrderItem(
+      menuItem: MenuItem(
+        id: '',
+        name: '',
+        description: '',
+        category: '',
+        price: 0.0,
+        baseRecipe: [],
+        optionGroups: [],
+        type: 'none',
+      ),
+      selectedOptions: [],
+      quantity: 0,
+      menuName: '',
     );
   }
 }

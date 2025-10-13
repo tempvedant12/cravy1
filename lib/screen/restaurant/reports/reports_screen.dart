@@ -1,6 +1,7 @@
 // lib/screen/restaurant/reports/reports_screen.dart
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cravy/screen/restaurant/menu/menu_screen.dart';
 import 'package:flutter/material.dart';
 import 'dart:ui'; // For Glassmorphism effects
 import 'package:intl/intl.dart';
@@ -38,85 +39,198 @@ class ReportsScreen extends StatefulWidget {
   State<ReportsScreen> createState() => _ReportsScreenState();
 }
 
-class _ReportsScreenState extends State<ReportsScreen> {
+class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateMixin {
   late Future<Map<String, dynamic>> _reportDataFuture;
-  DateTimeRange _selectedDateRange = DateTimeRange(start: DateTime.now().subtract(const Duration(days: 30)), end: DateTime.now());
+  late TabController _tabController;
+  DateTimeRange? _customDateRange;
+  List<Widget> _tabs = [];
+  final List<String> _tabPeriods = ['All', 'Today', 'This Week', 'This Month', 'This Year', 'Custom'];
+  List<MenuItem> _allMenuItems = [];
 
   @override
   void initState() {
     super.initState();
-    _reportDataFuture = _fetchReportData();
+    _tabs = _buildTabs();
+    _tabController = TabController(length: _tabs.length, vsync: this);
+    _reportDataFuture = _loadData();
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) {
+        if (_tabPeriods[_tabController.index] == 'Custom') {
+          _selectDateRange();
+        } else {
+          setState(() {
+            _customDateRange = null;
+            _tabs = _buildTabs();
+            _reportDataFuture = _loadData();
+          });
+        }
+      }
+    });
   }
 
-  Future<Map<String, dynamic>> _fetchReportData() async {
-    // 1. Fetch Sales Data (Data fetching logic is correct and remains unchanged)
-    final salesSnapshot = await FirebaseFirestore.instance
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  Future<Map<String, dynamic>> _loadData([String? period]) async {
+    if (_allMenuItems.isEmpty) {
+      await _fetchAllMenuItems();
+    }
+    return _fetchReportData(period ?? _tabPeriods[_tabController.index], customRange: _customDateRange);
+  }
+
+  Future<void> _fetchAllMenuItems() async {
+    final menusSnapshot = await FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('menus')
+        .get();
+
+    final List<MenuItem> allItems = [];
+
+    for (var menuDoc in menusSnapshot.docs) {
+      final itemsSnapshot = await menuDoc.reference.collection('items').get();
+      allItems.addAll(itemsSnapshot.docs.map((doc) => MenuItem.fromFirestore(doc)));
+    }
+
+    if (mounted) {
+      setState(() {
+        _allMenuItems = allItems;
+      });
+    }
+  }
+
+  List<Widget> _buildTabs() {
+    return [
+      const Tab(text: 'All Time'),
+      const Tab(text: 'Today'),
+      const Tab(text: 'This Week'),
+      const Tab(text: 'This Month'),
+      const Tab(text: 'This Year'),
+      Tab(
+        text: _customDateRange != null
+            ? '${DateFormat.yMd().format(_customDateRange!.start)} - ${DateFormat.yMd().format(_customDateRange!.end)}'
+            : 'Custom',
+      ),
+    ];
+  }
+
+  void _resetCustomRange() {
+    setState(() {
+      _customDateRange = null;
+      _tabs = _buildTabs();
+      _tabController.index = 0;
+      _reportDataFuture = _loadData();
+    });
+  }
+
+  Future<void> _selectDateRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      initialDateRange: _customDateRange,
+    );
+    if (picked != null) {
+      setState(() {
+        _customDateRange = picked;
+        _tabs = _buildTabs();
+        _reportDataFuture = _loadData('Custom');
+      });
+    }
+  }
+
+  Future<Map<String, dynamic>> _fetchReportData(String period, {DateTimeRange? customRange}) async {
+    DateTimeRange? dateRange = customRange;
+    final now = DateTime.now();
+
+    if (dateRange == null && period != 'All') {
+      switch (period) {
+        case 'Today':
+          dateRange = DateTimeRange(start: DateTime(now.year, now.month, now.day), end: now);
+          break;
+        case 'This Week':
+          final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+          dateRange = DateTimeRange(start: DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day), end: now);
+          break;
+        case 'This Month':
+          dateRange = DateTimeRange(start: DateTime(now.year, now.month, 1), end: now);
+          break;
+        case 'This Year':
+          dateRange = DateTimeRange(start: DateTime(now.year, 1, 1), end: now);
+          break;
+      }
+    }
+
+
+    Query salesQuery = FirebaseFirestore.instance
         .collection('restaurants')
         .doc(widget.restaurantId)
         .collection('orders')
-        .where('isPaid', isEqualTo: true)
-        .where('billingDetails.billedAt', isGreaterThanOrEqualTo: _selectedDateRange.start)
-        .where('billingDetails.billedAt', isLessThanOrEqualTo: _selectedDateRange.end.add(const Duration(days: 1)))
-        .get();
+        .where('isPaid', isEqualTo: true);
+
+    if (dateRange != null) {
+      salesQuery = salesQuery.where('billingDetails.billedAt', isGreaterThanOrEqualTo: dateRange.start)
+          .where('billingDetails.billedAt', isLessThanOrEqualTo: dateRange.end.add(const Duration(days: 1)));
+    }
+
+
+    final salesSnapshot = await salesQuery.get();
 
     double totalRevenue = 0;
-    int totalOrders = salesSnapshot.docs.length;
     final Map<String, int> productSales = {};
-    final Map<String, double> dailyRevenue = {};
     final Map<String, double> orderTypeDistribution = {};
+    final Map<String, List<DocumentSnapshot>> orderTypeDetails = {};
     final Map<String, double> categoryRevenue = {};
     final Map<String, double> dailyTimeSeriesRevenue = {};
+    final menuItemsMap = {for (var item in _allMenuItems) item.id: item};
+
+    // Group orders by bill number to count unique transactions
+    final Map<String, List<QueryDocumentSnapshot>> bills = {};
+    for (var doc in salesSnapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final billNumber = data['billingDetails']?['billNumber'] as String?;
+      if (billNumber != null) {
+        bills.putIfAbsent(billNumber, () => []).add(doc);
+      }
+    }
+    int totalOrders = bills.length;
+
 
     for (var doc in salesSnapshot.docs) {
-      final data = doc.data();
+      final data = doc.data()as Map<String, dynamic>;
       final finalTotal = (data['billingDetails']?['finalTotal'] as num?)?.toDouble() ?? 0.0;
       totalRevenue += finalTotal;
 
       final billedAt = (data['billingDetails']?['billedAt'] as Timestamp?)?.toDate();
       if (billedAt != null) {
-        final dayOfWeek = DateFormat('EEE').format(billedAt);
-        dailyRevenue.update(dayOfWeek, (value) => value + finalTotal, ifAbsent: () => finalTotal);
-
         final dateKey = DateFormat('MMM d').format(billedAt);
         dailyTimeSeriesRevenue.update(dateKey, (value) => value + finalTotal, ifAbsent: () => finalTotal);
       }
 
       final orderType = (data['orderType'] as String?) ?? 'Dine-In';
       orderTypeDistribution.update(orderType, (value) => value + 1, ifAbsent: () => 1);
+      orderTypeDetails.putIfAbsent(orderType, () => []).add(doc);
+
 
       final items = List<Map<String, dynamic>>.from(data['items'] ?? []);
       for (var item in items) {
         final name = item['name'] as String;
         final qty = (item['quantity'] as num?)?.toInt() ?? 0;
-        productSales.update(name, (value) => value + qty, ifAbsent: () => qty);
+        final menuName = item['menuName'] as String? ?? 'Unknown Menu';
+        final productKey = '$name ($menuName)';
+        productSales.update(productKey, (value) => value + qty, ifAbsent: () => qty);
 
         final itemPrice = (item['price'] as num?)?.toDouble() ?? 0.0;
         final itemTotal = (itemPrice * qty).toDouble();
 
-        // **INFERRED CATEGORY REVENUE (Heuristic):**
-        String category = 'Other';
-        if (name.contains('Burger') || name.contains('Pizza') || name.contains('Main')) {
-          category = 'Main Course';
-        } else if (name.contains('Fries') || name.contains('Appetizer') || name.contains('Starter')) {
-          category = 'Appetizers';
-        } else if (name.contains('Coke') || name.contains('Juice') || name.contains('Beverage')) {
-          category = 'Beverages';
-        } else if (name.contains('Cake') || name.contains('Pudding') || name.contains('Dessert')) {
-          category = 'Desserts';
-        }
-
-        categoryRevenue.update(category, (value) => value + itemTotal, ifAbsent: () => itemTotal);
+        final menuItem = menuItemsMap[item['menuItemId']];
+        String category = menuItem?.category ?? 'Other';
+        final categoryKey = '$category ($menuName)';
+        categoryRevenue.update(categoryKey, (value) => value + itemTotal, ifAbsent: () => itemTotal);
       }
-    }
-
-    final sortedDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    final Map<String, double> sortedDailyPayments = Map.fromEntries(
-      dailyRevenue.entries.toList()
-          .where((entry) => sortedDays.contains(entry.key))
-          .map((entry) => MapEntry(entry.key, entry.value)),
-    );
-    for (var day in sortedDays) {
-      sortedDailyPayments.putIfAbsent(day, () => 0.0);
     }
 
     final sortedTimeSeriesRevenue = Map.fromEntries(dailyTimeSeriesRevenue.entries.toList()
@@ -142,7 +256,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     final Map<String, double> supplierSpendings = {};
     for (var doc in poSnapshot.docs) {
-      final data = doc.data();
+      final data = doc.data() as Map<String, dynamic>;
       final supplierName = data['supplierName'] as String? ?? 'Unknown Supplier';
       final totalAmount = (data['amountPaid'] as num?)?.toDouble() ?? 0.0;
       supplierSpendings.update(supplierName, (value) => value + totalAmount, ifAbsent: () => totalAmount);
@@ -154,9 +268,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
         averageBill: totalOrders > 0 ? totalRevenue / totalOrders : 0,
         profitEstimate: totalRevenue * 0.35,
       ),
-      'topSelling': topSelling.take(5).map((e) => ProductPerformance(itemName: e.key, unitsSold: e.value, totalSales: 0)).toList(),
+      'topSelling': topSelling.map((e) => ProductPerformance(itemName: e.key, unitsSold: e.value, totalSales: 0)).toList(),
       'lowStockCount': inventorySnapshot.docs.where((doc) {
-        final data = doc.data();
+        final data = doc.data() as Map<String, dynamic>;
         final quantity = (data['quantity'] as num?)?.toDouble() ?? 0.0;
         final threshold = (data['lowStockThreshold'] as num?)?.toDouble() ?? 0.0;
         return quantity <= threshold;
@@ -164,40 +278,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
       'recentPO': poSnapshot.docs.length,
       'timeSeriesRevenue': sortedTimeSeriesRevenue,
       'orderTypeDistribution': Map.fromEntries(orderTypeDistribution.entries.map((e) => MapEntry(e.key, e.value.toDouble()))),
+      'orderTypeDetails': orderTypeDetails,
       'categoryRevenue': categoryRevenue,
       'supplierSpendings': supplierSpendings,
-      'dailyPayments': sortedDailyPayments,
     };
   }
-
-  Future<void> _selectDateRange() async {
-    final picked = await showDateRangePicker(
-      context: context, firstDate: DateTime(2020), lastDate: DateTime.now(), initialDateRange: _selectedDateRange,
-    );
-    if (picked != null && picked != _selectedDateRange) {
-      setState(() {
-        _selectedDateRange = picked;
-        _reportDataFuture = _fetchReportData();
-      });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final screenWidth = MediaQuery.of(context).size.width;
-
-    // Responsive grid counts
-    final salesGridCount = screenWidth > 1200 ? 4 : (screenWidth > 600 ? 2 : 1);
-    final chartGridCount = screenWidth > 1400 ? 3 : (screenWidth > 800 ? 2 : 1);
-    final productGridCount = screenWidth > 1000 ? 3 : 1;
-    final supplierGridCount = screenWidth > 1000 ? 2 : 1;
-
-    // Responsive aspect ratios
-    final chartAspectRatio = screenWidth > 800 ? 1.8 : 1.2;
-    final productAspectRatio = screenWidth > 1000 ? 1.0 : 2.0;
-    final supplierAspectRatio = screenWidth > 1000 ? 1.2 : 2.0;
-
 
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF14141E) : Colors.grey[50],
@@ -205,158 +293,268 @@ class _ReportsScreenState extends State<ReportsScreen> {
       body: Stack(
         children: [
           const _PremiumBackground(),
-          FutureBuilder<Map<String, dynamic>>(
-            future: _reportDataFuture,
-            builder: (context, snapshot) {
-              final theme = Theme.of(context);
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (snapshot.hasError) {
-                return Center(child: Text('Error: ${snapshot.error}'));
-              }
-              if (!snapshot.hasData) {
-                return const Center(child: Text('No data available.'));
-              }
-
-              final data = snapshot.data!;
-              final summary = data['salesSummary'] as SalesSummary;
-              final topSelling = data['topSelling'] as List<ProductPerformance>;
-              final lowStockCount = data['lowStockCount'] as int;
-
-              final timeSeriesRevenue = (data['timeSeriesRevenue'] as Map<String, double>?) ?? {};
-              final orderTypeDistribution = (data['orderTypeDistribution'] as Map<String, double>?) ?? {};
-              final categoryRevenue = (data['categoryRevenue'] as Map<String, double>?) ?? {};
-              final supplierSpendings = (data['supplierSpendings'] as Map<String, double>?) ?? {};
-              final dailyPayments = (data['dailyPayments'] as Map<String, double>?) ?? {};
-
-
-              return CustomScrollView(
-                slivers: [
-                  SliverAppBar(
-                    title: const Text('Powerful Reports', style: TextStyle(fontWeight: FontWeight.w600)),
-                    pinned: true,
-                    backgroundColor: isDark ? const Color(0xFF14141E).withOpacity(0.9) : Colors.white.withOpacity(0.95),
-                    elevation: 0,
-                    actions: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8.0),
-                        child: OutlinedButton.icon(
-                          onPressed: _selectDateRange,
-                          icon: const Icon(Icons.calendar_today_outlined, size: 18),
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: theme.colorScheme.primary.withOpacity(0.5)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                          label: Text('${DateFormat.yMMMd().format(_selectedDateRange.start)} - ${DateFormat.MMMd().format(_selectedDateRange.end)}'),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                    ],
+          NestedScrollView(
+            headerSliverBuilder: (context, innerBoxIsScrolled) {
+              return [
+                SliverAppBar(
+                  title: const Text('Powerful Reports', style: TextStyle(fontWeight: FontWeight.w600)),
+                  pinned: true,
+                  floating: true,
+                  snap: true,
+                  forceElevated: innerBoxIsScrolled,
+                  backgroundColor: isDark ? const Color(0xFF14141E).withOpacity(0.9) : Colors.white.withOpacity(0.95),
+                  elevation: 0,
+                  actions: [
+                    if (_customDateRange != null)
+                      IconButton(
+                        icon: const Icon(Icons.refresh),
+                        onPressed: _resetCustomRange,
+                        tooltip: 'Reset Custom Range',
+                      )
+                  ],
+                  bottom: TabBar(
+                    controller: _tabController,
+                    isScrollable: true,
+                    tabs: _tabs,
                   ),
-
-                  // 1. Sales Summary Cards
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(20.0, 24.0, 20.0, 20.0),
-                    sliver: SliverGrid.count(
-                      crossAxisCount: salesGridCount,
-                      crossAxisSpacing: 20,
-                      mainAxisSpacing: 20,
-                      childAspectRatio: 1.5,
-                      children: [
-                        _GlassmorphicReportCard(
-                          title: 'Total Revenue', value: '₹${NumberFormat.compactLong().format(summary.totalRevenue)}',
-                          icon: Icons.attach_money, color: Colors.green,
-                        ),
-                        _GlassmorphicReportCard(
-                          title: 'Total Orders', value: NumberFormat.compact().format(summary.totalOrders),
-                          icon: Icons.receipt_long, color: Colors.blue,
-                        ),
-                        _GlassmorphicReportCard(
-                          title: 'Avg. Bill Value', value: '₹${summary.averageBill.toStringAsFixed(2)}',
-                          icon: Icons.trending_up, color: Colors.purple,
-                        ),
-                        _GlassmorphicReportCard(
-                          title: 'Profit Estimate', value: '₹${NumberFormat.compactLong().format(summary.profitEstimate)}',
-                          icon: Icons.bar_chart, color: Colors.orange,
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // 2. Main Sales & Order Breakdown (Charts)
-                  SliverToBoxAdapter(
-                    child: _buildSectionHeader(theme, 'Sales & Order Breakdown', Icons.timeline_outlined),
-                  ),
-                  SliverPadding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                    sliver: SliverGrid.count(
-                      crossAxisCount: chartGridCount,
-                      crossAxisSpacing: 20,
-                      mainAxisSpacing: 20,
-                      childAspectRatio: chartAspectRatio,
-                      children: [
-                        _GlassmorphicChartCard(
-                          child: _TimeSeriesChartContent(theme, 'Daily Revenue Over Time', timeSeriesRevenue, Colors.green.shade500),
-                        ),
-                        _GlassmorphicChartCard(
-                          child: _PieChartContent(theme, 'Order Type Split', orderTypeDistribution, Colors.blue.shade500),
-                        ),
-                        _GlassmorphicChartCard(
-                          child: _DailyPaymentsBarContent(theme, 'Daily Payment Volume', dailyPayments, Colors.indigo.shade500),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // 3. Product Performance & Inventory
-                  SliverToBoxAdapter(
-                    child: _buildSectionHeader(theme, 'Product Performance & Inventory', Icons.local_dining_outlined),
-                  ),
-                  SliverPadding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                    sliver: SliverGrid.count(
-                      crossAxisCount: productGridCount,
-                      crossAxisSpacing: 20,
-                      mainAxisSpacing: 20,
-                      childAspectRatio: productAspectRatio,
-                      children: [
-                        _GlassmorphicListReportCard(title: 'Top 5 Selling Items', items: topSelling.map((p) => '${p.itemName} (${p.unitsSold} units)').toList()),
-                        _GlassmorphicChartCard(
-                          child: _CategoryBarContent(theme, 'Sales by Item Group', categoryRevenue, Colors.purple.shade500),
-                        ),
-                        _GlassmorphicAlertCard(title: 'Inventory Alerts', value: '$lowStockCount Items', subtitle: 'Are below low-stock threshold.', color: Colors.red, icon: Icons.warning_amber_outlined),
-                      ],
-                    ),
-                  ),
-
-                  // 4. Supplier & Cost Insights
-                  SliverToBoxAdapter(
-                    child: _buildSectionHeader(theme, 'Supplier & Cost Insights', Icons.local_shipping_outlined),
-                  ),
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 80),
-                    sliver: SliverGrid.count(
-                      crossAxisCount: supplierGridCount,
-                      crossAxisSpacing: 20,
-                      mainAxisSpacing: 20,
-                      childAspectRatio: supplierAspectRatio,
-                      children: [
-                        _GlassmorphicChartCard(
-                          child: _SupplierSpendingBarContent(theme, 'Supplier Spending Breakdown', supplierSpendings, Colors.teal.shade500),
-                        ),
-                        _GlassmorphicAlertCard(title: 'Completed POs', value: '${data['recentPO'] ?? 0}', subtitle: 'Completed Purchase Orders.', color: Colors.lightGreen, icon: Icons.check_circle_outline),
-                      ],
-                    ),
-                  ),
-                ],
-              );
+                ),
+              ];
             },
+            body: FutureBuilder<Map<String, dynamic>>(
+              future: _reportDataFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return Center(child: Text('Error: ${snapshot.error}'));
+                }
+                if (!snapshot.hasData) {
+                  return const Center(child: Text('No data available.'));
+                }
+
+                final data = snapshot.data!;
+                final summary = data['salesSummary'] as SalesSummary;
+                final topSelling = data['topSelling'] as List<ProductPerformance>;
+                final lowStockCount = data['lowStockCount'] as int;
+
+                final timeSeriesRevenue = (data['timeSeriesRevenue'] as Map<String, double>?) ?? {};
+                final orderTypeDistribution = (data['orderTypeDistribution'] as Map<String, double>?) ?? {};
+                final orderTypeDetails = (data['orderTypeDetails'] as Map<String, List<DocumentSnapshot>>?) ?? {};
+                final categoryRevenue = (data['categoryRevenue'] as Map<String, double>?) ?? {};
+                final supplierSpendings = (data['supplierSpendings'] as Map<String, double>?) ?? {};
+
+                final theme = Theme.of(context);
+                final screenWidth = MediaQuery.of(context).size.width;
+                final salesGridCount = screenWidth > 1200 ? 4 : (screenWidth > 600 ? 2 : 1);
+                final chartGridCount = screenWidth > 800 ? 2 : 1;
+                final productGridCount = screenWidth > 1000 ? 3 : 1;
+                final supplierGridCount = screenWidth > 1000 ? 2 : 1;
+                final chartAspectRatio = screenWidth > 800 ? 1.8 : 1.2;
+                final productAspectRatio = screenWidth > 1000 ? 1.0 : 1.2;
+                final supplierAspectRatio = screenWidth > 1000 ? 1.2 : 1.2;
+
+                return ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20.0, 24.0, 20.0, 20.0),
+                      child: GridView.count(
+                        physics: const NeverScrollableScrollPhysics(),
+                        shrinkWrap: true,
+                        crossAxisCount: salesGridCount,
+                        crossAxisSpacing: 20,
+                        mainAxisSpacing: 20,
+                        childAspectRatio: 1.5,
+                        children: [
+                          _GlassmorphicReportCard(
+                            title: 'Total Revenue', value: '₹${NumberFormat.compactLong().format(summary.totalRevenue)}',
+                            icon: Icons.attach_money, color: Colors.green,
+                          ),
+                          _GlassmorphicReportCard(
+                            title: 'Total Orders', value: NumberFormat.compact().format(summary.totalOrders),
+                            icon: Icons.receipt_long, color: Colors.blue,
+                          ),
+                          _GlassmorphicReportCard(
+                            title: 'Avg. Bill Value', value: '₹${summary.averageBill.toStringAsFixed(2)}',
+                            icon: Icons.trending_up, color: Colors.purple,
+                          ),
+                          _GlassmorphicReportCard(
+                            title: 'Profit Estimate', value: '₹${NumberFormat.compactLong().format(summary.profitEstimate)}',
+                            icon: Icons.bar_chart, color: Colors.orange,
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    _buildSectionHeader(theme, 'Sales & Order Breakdown', Icons.timeline_outlined),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                      child: GridView.count(
+                        physics: const NeverScrollableScrollPhysics(),
+                        shrinkWrap: true,
+                        crossAxisCount: chartGridCount,
+                        crossAxisSpacing: 20,
+                        mainAxisSpacing: 20,
+                        childAspectRatio: chartAspectRatio,
+                        children: [
+                          _GlassmorphicChartCard(
+                            child: _DailyRevenueBarChart(
+                              theme: theme,
+                              title: 'Daily Revenue',
+                              data: timeSeriesRevenue,
+                              color: Colors.green.shade500,
+                              onTap: () => _showDailyRevenueDetails(context, timeSeriesRevenue),
+                            ),
+                          ),
+                          _GlassmorphicChartCard(
+                            child: GestureDetector(
+                              onTap: () => _showOrderTypeDetails(context, orderTypeDetails),
+                              child: _PieChartContent(theme, 'Order Type Split', orderTypeDistribution, Colors.blue.shade500),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    _buildSectionHeader(theme, 'Product Performance & Inventory', Icons.local_dining_outlined),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                      child: GridView.count(
+                        physics: const NeverScrollableScrollPhysics(),
+                        shrinkWrap: true,
+                        crossAxisCount: productGridCount,
+                        crossAxisSpacing: 20,
+                        mainAxisSpacing: 20,
+                        childAspectRatio: productAspectRatio,
+                        children: [
+                          _GlassmorphicListReportCard(
+                            title: 'Top 5 Selling Items',
+                            items: topSelling,
+                            onTap: () => _showTopSellingItemsDetails(context, topSelling),
+                          ),
+                          _GlassmorphicChartCard(
+                            child: _CategoryBarContent(theme: theme, title: 'Sales by Item Group', data: categoryRevenue, color: Colors.purple.shade500),
+                          ),
+                          _GlassmorphicAlertCard(title: 'Inventory Alerts', value: '$lowStockCount Items', subtitle: 'Are below low-stock threshold.', color: Colors.red, icon: Icons.warning_amber_outlined),
+                        ],
+                      ),
+                    ),
+
+                    _buildSectionHeader(theme, 'Supplier & Cost Insights', Icons.local_shipping_outlined),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 80),
+                      child: GridView.count(
+                        physics: const NeverScrollableScrollPhysics(),
+                        shrinkWrap: true,
+                        crossAxisCount: supplierGridCount,
+                        crossAxisSpacing: 20,
+                        mainAxisSpacing: 20,
+                        childAspectRatio: supplierAspectRatio,
+                        children: [
+                          _GlassmorphicChartCard(
+                            child: GestureDetector(
+                              onTap: () => _showSupplierSpendingDetails(context, supplierSpendings),
+                              child: _SupplierSpendingBarContent(theme: theme, title: 'Supplier Spending Breakdown', data: supplierSpendings, color: Colors.teal.shade500),
+                            ),
+                          ),
+                          _GlassmorphicAlertCard(title: 'Completed POs', value: '${data['recentPO'] ?? 0}', subtitle: 'Completed Purchase Orders.', color: Colors.lightGreen, icon: Icons.check_circle_outline),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
         ],
       ),
     );
   }
+
+  void _showDailyRevenueDetails(BuildContext context, Map<String, double> dailyRevenue) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (BuildContext context, ScrollController scrollController) {
+            return _DailyRevenueDetailsSheet(
+              dailyRevenue: dailyRevenue,
+              scrollController: scrollController,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showOrderTypeDetails(BuildContext context, Map<String, List<DocumentSnapshot>> orderTypeDetails) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (BuildContext context, ScrollController scrollController) {
+            return _OrderTypeDetailsSheet(
+              orderTypeDetails: orderTypeDetails,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showTopSellingItemsDetails(BuildContext context, List<ProductPerformance> topSelling) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (BuildContext context, ScrollController scrollController) {
+            return _TopSellingItemsSheet(
+              topSellingItems: topSelling,
+              scrollController: scrollController,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showSupplierSpendingDetails(BuildContext context, Map<String, double> supplierSpendings) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (BuildContext context, ScrollController scrollController) {
+            return _SupplierSpendingDetailsSheet(
+              supplierSpendings: supplierSpendings,
+              scrollController: scrollController,
+            );
+          },
+        );
+      },
+    );
+  }
+
 
   // =======================================================
   // HELPER METHODS (RESPONSIVENESS FIXES APPLIED HERE)
@@ -375,77 +573,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
               style: theme.textTheme.headlineMedium?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: theme.textTheme.bodyLarge?.color,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _TimeSeriesChartContent(ThemeData theme, String title, Map<String, double> data, Color color) {
-    if (data.isEmpty) {
-      data = {'Day 1': 0.0, 'Day 2': 0.0, 'Day 3': 0.0};
-    }
-
-    final maxValue = data.values.fold(0.0, (a, b) => max(a, b));
-    final currencyFormatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
-
-    final List<double> values = data.values.toList();
-    final List<String> labels = data.keys.toList();
-
-    final int segmentCount = max(1, values.length - 1);
-
-    const String explanation = 'Tracks your gross revenue by day within the selected range.';
-
-    return Padding(
-      padding: const EdgeInsets.all(20.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          Text(explanation, style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodyLarge?.color?.withOpacity(0.7)), softWrap: true),
-          const Divider(height: 20),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(28.0, 4.0, 8.0, 4.0),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final double chartHeight = constraints.maxHeight;
-
-                  return Stack(
-                    children: [
-                      // Y-Axis Labels (Left)
-                      Positioned(top: 0, left: -28, child: Text(currencyFormatter.format(maxValue), style: theme.textTheme.bodySmall)),
-                      Positioned(top: chartHeight / 2 - 10, left: -28, child: Text(currencyFormatter.format(maxValue / 2), style: theme.textTheme.bodySmall)),
-                      Positioned(bottom: 0, left: -28, child: Text(currencyFormatter.format(0), style: theme.textTheme.bodySmall)),
-
-                      // Chart Area (Line)
-                      CustomPaint(
-                        size: Size(constraints.maxWidth, chartHeight),
-                        painter: _LineChartPainter(values: values, maxValue: maxValue, color: color, segmentCount: segmentCount),
-                      ),
-
-                      // X-Axis Labels (Bottom)
-                      Positioned(
-                        bottom: -20,
-                        left: 0,
-                        right: 0,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(labels.first, style: theme.textTheme.bodySmall),
-                            if (labels.length > 2)
-                              Text(labels[labels.length ~/ 2], style: theme.textTheme.bodySmall),
-                            if (labels.length > 1)
-                              Text(labels.last, style: theme.textTheme.bodySmall),
-                          ],
-                        ),
-                      ),
-                    ],
-                  );
-                },
               ),
             ),
           ),
@@ -545,203 +672,113 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ),
     );
   }
+}
 
-  Widget _DailyPaymentsBarContent(ThemeData theme, String title, Map<String, double> data, Color color) {
-    final sortedKeys = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    final dataForChart = Map.fromEntries(sortedKeys.map((day) => MapEntry(day, data[day] ?? 0.0)));
-    final maxValue = dataForChart.values.fold(0.0, (a, b) => max(a, b));
-    final currencyFormatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+class _CategoryBarContent extends StatefulWidget {
+  final ThemeData theme;
+  final String title;
+  final Map<String, double> data;
+  final Color color;
 
-    const String explanation = 'Visualizes total transaction value processed each day. Helps identify peak sales days.';
+  const _CategoryBarContent({
+    required this.theme,
+    required this.title,
+    required this.data,
+    required this.color,
+  });
 
-    return Padding(
-      padding: const EdgeInsets.all(20.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          Text(explanation, style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodyLarge?.color?.withOpacity(0.7)), softWrap: true),
-          const Divider(height: 24),
-          Expanded(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: dataForChart.entries.map((e) {
-                final barHeightFactor = maxValue > 0 ? (e.value / maxValue).clamp(0.0, 1.0) : 0.0;
-                return Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      FittedBox(
-                        child: Text(
-                          currencyFormatter.format(e.value),
-                          style: theme.textTheme.bodySmall?.copyWith(color: color, fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Expanded(
-                        child: Container(
-                          // FIX: Removed fixed width: 24, rely on constraints
-                          constraints: const BoxConstraints(maxWidth: 30),
-                          height: double.infinity,
-                          alignment: Alignment.bottomCenter,
-                          child: FractionallySizedBox(
-                            heightFactor: barHeightFactor,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: color.withOpacity(0.8),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      FittedBox(child: Text(e.key, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600))),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  @override
+  __CategoryBarContentState createState() => __CategoryBarContentState();
+}
 
+class __CategoryBarContentState extends State<_CategoryBarContent> {
+  bool _isExpanded = false;
 
-  Widget _CategoryBarContent(ThemeData theme, String title, Map<String, double> data, Color color) {
-    final maxRevenue = data.values.fold(0.0, (a, b) => max(a, b));
+  @override
+  Widget build(BuildContext context) {
+    final maxRevenue = widget.data.values.fold(0.0, (a, b) => max(a, b));
     const String explanation = 'Compares total revenue generated by each item group.';
     final currencyFormatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
-    final List<MapEntry<String, double>> sortedData = data.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-
-    return Padding(
-      padding: const EdgeInsets.all(20.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          Text(explanation, style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodyLarge?.color?.withOpacity(0.7)), softWrap: true),
-          const Divider(height: 24),
-          Expanded(
-            child: ListView.builder(
-              itemCount: sortedData.length,
-              itemBuilder: (context, index) {
-                final e = sortedData[index];
-                final barWidth = maxRevenue > 0 ? (e.value / maxRevenue) : 0;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FittedBox(
-                          child: Text(e.key, style: theme.textTheme.bodyLarge)
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              height: 14,
-                              alignment: Alignment.centerLeft,
-                              decoration: BoxDecoration(
-                                color: color.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(7),
-                              ),
-                              child: FractionallySizedBox(
-                                widthFactor: barWidth.clamp(0.0, 1.0).toDouble(),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: color,
-                                    borderRadius: BorderRadius.circular(7),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          FittedBox(
-                            child: Text(currencyFormatter.format(e.value), style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold)),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _SupplierSpendingBarContent(ThemeData theme, String title, Map<String, double> data, Color color) {
-    final maxSpending = data.values.fold(0.0, (a, b) => max(a, b));
-    final currencyFormatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
-    const String explanation = 'Identifies your largest suppliers by total spending.';
-    final List<MapEntry<String, double>> sortedData = data.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
+    final List<MapEntry<String, double>> sortedData = widget.data.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final itemsToShow = _isExpanded ? sortedData : sortedData.take(3).toList();
 
     return Padding(
       padding: const EdgeInsets.all(20.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+          Text(widget.title, style: widget.theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
-          Text(explanation, style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodyLarge?.color?.withOpacity(0.7)), softWrap: true),
+          Text(explanation, style: widget.theme.textTheme.bodySmall?.copyWith(color: widget.theme.textTheme.bodyLarge?.color?.withOpacity(0.7)), softWrap: true),
           const Divider(height: 24),
           Expanded(
-            child: ListView.builder(
-              itemCount: sortedData.length,
-              itemBuilder: (context, index) {
-                final e = sortedData[index];
-                final barWidth = maxSpending > 0 ? (e.value / maxSpending) : 0;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FittedBox(
-                        child: Text(e.key, style: theme.textTheme.bodyLarge),
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              height: 16,
-                              alignment: Alignment.centerLeft,
-                              decoration: BoxDecoration(
-                                color: color.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(8),
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+              child: Column(
+                children: [
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: itemsToShow.length,
+                      itemBuilder: (context, index) {
+                        final e = itemsToShow[index];
+                        final barWidth = maxRevenue > 0 ? (e.value / maxRevenue) : 0;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              FittedBox(
+                                child: Text(e.key, style: widget.theme.textTheme.bodyLarge),
                               ),
-                              child: FractionallySizedBox(
-                                widthFactor: barWidth.clamp(0.0, 1.0).toDouble(),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: color,
-                                    borderRadius: BorderRadius.circular(8),
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Container(
+                                      height: 14,
+                                      alignment: Alignment.centerLeft,
+                                      decoration: BoxDecoration(
+                                        color: widget.color.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(7),
+                                      ),
+                                      child: FractionallySizedBox(
+                                        widthFactor: barWidth.clamp(0.0, 1.0).toDouble(),
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            color: widget.color,
+                                            borderRadius: BorderRadius.circular(7),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   ),
-                                ),
+                                  const SizedBox(width: 10),
+                                  FittedBox(
+                                    child: Text(
+                                      currencyFormatter.format(e.value),
+                                      style: widget.theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
+                            ],
                           ),
-                          const SizedBox(width: 10),
-                          FittedBox(
-                            child: Text(currencyFormatter.format(e.value), style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold)),
-                          ),
-                        ],
-                      ),
-                    ],
+                        );
+                      },
+                    ),
                   ),
-                );
-              },
+                  if (sortedData.length > 3)
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _isExpanded = !_isExpanded;
+                        });
+                      },
+                      child: Text(_isExpanded ? 'Show Less' : 'Show More'),
+                    ),
+                ],
+              ),
             ),
           ),
         ],
@@ -749,6 +786,153 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 }
+
+class _SupplierSpendingBarContent extends StatefulWidget {
+  final ThemeData theme;
+  final String title;
+  final Map<String, double> data;
+  final Color color;
+
+  const _SupplierSpendingBarContent({
+    required this.theme,
+    required this.title,
+    required this.data,
+    required this.color,
+  });
+
+  @override
+  __SupplierSpendingBarContentState createState() =>
+      __SupplierSpendingBarContentState();
+}
+
+class __SupplierSpendingBarContentState
+    extends State<_SupplierSpendingBarContent> {
+  bool _isExpanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxSpending = widget.data.values.fold(0.0, (a, b) => max(a, b));
+    final currencyFormatter =
+    NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+    const String explanation =
+        'Identifies your largest suppliers by total spending.';
+    final List<MapEntry<String, double>> sortedData =
+    widget.data.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final itemsToShow = _isExpanded ? sortedData : sortedData.take(3).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(widget.title,
+              style: widget.theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Text(explanation,
+              style: widget.theme.textTheme.bodySmall?.copyWith(
+                  color:
+                  widget.theme.textTheme.bodyLarge?.color?.withOpacity(0.7)),
+              softWrap: true),
+          const Divider(height: 24),
+          if (itemsToShow.isEmpty)
+            Expanded(
+              child: Center(
+                child: Text(
+                  'No supplier spending data for this period.',
+                  style: widget.theme.textTheme.bodyLarge,
+                ),
+              ),
+            )
+          else
+            Expanded(
+              // FIX: Wrap the content Column in an AnimatedSize to ensure
+              // the layout rebuilds correctly when the list appears.
+              child: AnimatedSize(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                alignment: Alignment.topCenter,
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: itemsToShow.length,
+                        itemBuilder: (context, index) {
+                          final e = itemsToShow[index];
+                          final barWidth =
+                          maxSpending > 0 ? (e.value / maxSpending) : 0;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                FittedBox(
+                                  child: Text(e.key,
+                                      style: widget.theme.textTheme.bodyLarge),
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Container(
+                                        height: 16,
+                                        alignment: Alignment.centerLeft,
+                                        decoration: BoxDecoration(
+                                          color:
+                                          widget.color.withOpacity(0.1),
+                                          borderRadius:
+                                          BorderRadius.circular(8),
+                                        ),
+                                        child: FractionallySizedBox(
+                                          widthFactor: barWidth
+                                              .clamp(0.0, 1.0)
+                                              .toDouble(),
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: widget.color,
+                                              borderRadius:
+                                              BorderRadius.circular(8),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    FittedBox(
+                                      child: Text(
+                                        currencyFormatter.format(e.value),
+                                        style: widget.theme.textTheme.bodyMedium
+                                            ?.copyWith(
+                                            fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    if (sortedData.length > 3)
+                      TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _isExpanded = !_isExpanded;
+                          });
+                        },
+                        child: Text(_isExpanded ? 'Show Less' : 'Show More'),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 
 // =======================================================
 // PREMIUM TOP-LEVEL WIDGETS AND PAINTERS (MODIFIED)
@@ -859,7 +1043,7 @@ class _GlassmorphicChartCard extends StatelessWidget {
   }
 }
 
-/// --- _GlassmorphicAlertCard (FIXED: Uses Spacer to prevent overflow) ---
+/// --- _GlassmorphicAlertCard (UPDATED with better design) ---
 class _GlassmorphicAlertCard extends StatelessWidget {
   final String title;
   final String value;
@@ -887,45 +1071,46 @@ class _GlassmorphicAlertCard extends StatelessWidget {
           ),
           child: Padding(
             padding: const EdgeInsets.all(24.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.start,
+            child: Row( // Changed to Row for better layout
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(icon, size: 30, color: color),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ],
-                ),
-                // FIX: Replaced const SizedBox(height: 24) with Spacer
-                const Spacer(),
-                FittedBox(
-                  child: Text(
-                    value,
-                    style: theme.textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: color,
-                    ),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.2),
+                    shape: BoxShape.circle, // Use Circle for the icon
                   ),
+                  child: Icon(icon, size: 32, color: color),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  subtitle,
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    color: theme.textTheme.bodyLarge?.color?.withOpacity(0.8),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        title,
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600, color: theme.textTheme.bodyLarge?.color?.withOpacity(0.8)),
+                      ),
+                      const SizedBox(height: 4),
+                      FittedBox(
+                        child: Text(
+                          value,
+                          style: theme.textTheme.headlineMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: color,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.textTheme.bodyLarge?.color?.withOpacity(0.7),
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -937,12 +1122,14 @@ class _GlassmorphicAlertCard extends StatelessWidget {
   }
 }
 
-/// --- _GlassmorphicListReportCard (No change needed) ---
+
+/// --- _GlassmorphicListReportCard (UPDATED to accept ProductPerformance and be tappable) ---
 class _GlassmorphicListReportCard extends StatelessWidget {
   final String title;
-  final List<String> items;
+  final List<ProductPerformance> items;
+  final VoidCallback onTap;
 
-  const _GlassmorphicListReportCard({required this.title, required this.items});
+  const _GlassmorphicListReportCard({required this.title, required this.items, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -950,124 +1137,57 @@ class _GlassmorphicListReportCard extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final cardColor = isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.6);
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          decoration: BoxDecoration(
-            color: cardColor,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-                const Divider(height: 30),
-                Expanded(
-                  child: ListView.separated(
-                    itemCount: items.length,
-                    separatorBuilder: (context, index) => Divider(color: theme.dividerColor.withOpacity(0.5), height: 20),
-                    itemBuilder: (context, index) {
-                      return FittedBox(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '${index + 1}. ${items[index]}',
-                          style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w500),
-                        ),
-                      );
-                    },
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: cardColor,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                  const Divider(height: 24),
+                  Expanded(
+                    child: items.isEmpty
+                        ? Center(child: Text('No product sales yet.', style: theme.textTheme.bodyLarge))
+                        : ListView.separated(
+                      itemCount: items.length > 5 ? 5 : items.length, // Show top 5
+                      separatorBuilder: (context, index) => Divider(color: theme.dividerColor.withOpacity(0.5), height: 1),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          leading: CircleAvatar(
+                            radius: 16,
+                            backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
+                            child: Text(
+                              '#${index + 1}',
+                              style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ),
+                          title: Text(item.itemName, style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w500)),
+                          trailing: Text('${item.unitsSold} units', style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
+                        );
+                      },
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
       ),
     );
-  }
-}
-
-/// --- _LineChartPainter (No change needed) ---
-class _LineChartPainter extends CustomPainter {
-  final List<double> values;
-  final double maxValue;
-  final Color color;
-  final int segmentCount;
-
-  _LineChartPainter({required this.values, required this.maxValue, required this.color, required this.segmentCount});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 3.0
-      ..style = PaintingStyle.stroke;
-
-    final gradient = LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      colors: [color.withOpacity(0.4), Colors.transparent],
-      stops: const [0.0, 1.0],
-    ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-
-    final fillPaint = Paint()
-      ..shader = gradient
-      ..style = PaintingStyle.fill;
-
-    final dotPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    final path = Path();
-    final fillPath = Path();
-
-    final double xStep = size.width / segmentCount;
-
-    for (int i = 0; i < values.length; i++) {
-      final double normalizedY = size.height * (1 - (values[i] / maxValue).clamp(0.0, 1.0));
-      final double x = i * xStep;
-      final Offset point = Offset(x, normalizedY);
-
-      if (i == 0) {
-        path.moveTo(point.dx, point.dy);
-        fillPath.moveTo(point.dx, size.height);
-        fillPath.lineTo(point.dx, point.dy);
-      } else {
-        path.lineTo(point.dx, point.dy);
-        fillPath.lineTo(point.dx, point.dy);
-      }
-
-      if (values.length <= 20) {
-        canvas.drawCircle(point, 4, dotPaint);
-        canvas.drawCircle(point, 2.5, Paint()..color = Colors.white);
-      }
-    }
-
-    if (values.isNotEmpty) {
-      fillPath.lineTo(size.width, size.height);
-      fillPath.close();
-    }
-
-    canvas.drawPath(fillPath, fillPaint);
-    canvas.drawPath(path, paint);
-
-    final referenceLinePaint = Paint()
-      ..color = color.withOpacity(0.15)
-      ..strokeWidth = 1.0;
-    canvas.drawLine(Offset(0, size.height), Offset(size.width, size.height), referenceLinePaint);
-    canvas.drawLine(Offset(0, size.height / 2), Offset(size.width, size.height / 2), referenceLinePaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    if (oldDelegate is _LineChartPainter) {
-      return oldDelegate.values != values || oldDelegate.maxValue != maxValue;
-    }
-    return true;
   }
 }
 
@@ -1114,6 +1234,439 @@ class _PremiumBackground extends StatelessWidget {
             color: color.withOpacity(0.3),
             blurRadius: 50,
             spreadRadius: 10,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DailyRevenueBarChart extends StatelessWidget {
+  final ThemeData theme;
+  final String title;
+  final Map<String, double> data;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _DailyRevenueBarChart({
+    required this.theme,
+    required this.title,
+    required this.data,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    var chartData = data;
+    if (chartData.isEmpty) {
+      chartData = {'Day 1': 0.0, 'Day 2': 0.0, 'Day 3': 0.0, 'Day 4': 0.0, 'Day 5': 0.0, 'Day 6': 0.0, 'Day 7': 0.0};
+    }
+
+    final maxValue = chartData.values.fold(0.0, (a, b) => max(a, b));
+    final currencyFormatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+
+    const String explanation = 'Tracks your gross revenue by day within the selected range.';
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(explanation, style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodyLarge?.color?.withOpacity(0.7)), softWrap: true),
+            const Divider(height: 20),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: chartData.entries.map((entry) {
+                    final barHeightFactor = maxValue > 0 ? (entry.value / maxValue).clamp(0.0, 1.0) : 0.0;
+                    return Container(
+                      width: 60,
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          FittedBox(
+                            child: Text(
+                              currencyFormatter.format(entry.value),
+                              style: theme.textTheme.bodySmall?.copyWith(color: color, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Expanded(
+                            child: Container(
+                              alignment: Alignment.bottomCenter,
+                              child: FractionallySizedBox(
+                                heightFactor: barHeightFactor,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: color.withOpacity(0.8),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          FittedBox(child: Text(entry.key, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600))),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DailyRevenueDetailsSheet extends StatelessWidget {
+  final Map<String, double> dailyRevenue;
+  final ScrollController scrollController;
+
+  const _DailyRevenueDetailsSheet({required this.dailyRevenue, required this.scrollController});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final sortedEntries = dailyRevenue.entries.toList()
+      ..sort((a, b) => DateFormat('MMM d').parse(b.key).compareTo(DateFormat('MMM d').parse(a.key)));
+    final currencyFormatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.scaffoldBackgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          // Draggable handle and close button
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 40,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Daily Revenue Details', style: theme.textTheme.headlineSmall),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 24),
+          Expanded(
+            child: ListView.builder(
+              controller: scrollController,
+              itemCount: sortedEntries.length,
+              itemBuilder: (context, index) {
+                final entry = sortedEntries[index];
+                return ListTile(
+                  title: Text(entry.key, style: theme.textTheme.titleMedium),
+                  trailing: Text(
+                    currencyFormatter.format(entry.value),
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold, color: theme.primaryColor),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OrderTypeDetailsSheet extends StatefulWidget {
+  final Map<String, List<DocumentSnapshot>> orderTypeDetails;
+
+  const _OrderTypeDetailsSheet({required this.orderTypeDetails});
+
+  @override
+  __OrderTypeDetailsSheetState createState() => __OrderTypeDetailsSheetState();
+}
+
+class __OrderTypeDetailsSheetState extends State<_OrderTypeDetailsSheet>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController =
+        TabController(length: widget.orderTypeDetails.keys.length, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final currencyFormatter =
+    NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.scaffoldBackgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          // Draggable handle and close button
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 40,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Order Type Details', style: theme.textTheme.headlineSmall),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 24),
+          TabBar(
+            controller: _tabController,
+            tabs: widget.orderTypeDetails.keys
+                .map((type) => Tab(text: type))
+                .toList(),
+          ),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: widget.orderTypeDetails.keys.map((type) {
+                final orders = widget.orderTypeDetails[type]!;
+                return ListView.builder(
+                  itemCount: orders.length,
+                  itemBuilder: (context, index) {
+                    final order = orders[index].data() as Map<String, dynamic>;
+                    final billingDetails =
+                        order['billingDetails'] as Map<String, dynamic>? ?? {};
+                    final billedAt =
+                    (billingDetails['billedAt'] as Timestamp?)?.toDate();
+                    final items = List<Map<String, dynamic>>.from(order['items'] ?? []);
+                    return ExpansionTile(
+                      title: Text('Order #${orders[index].id.substring(0, 6)}'),
+                      subtitle: Text(
+                        billedAt != null
+                            ? DateFormat.yMMMd().add_jm().format(billedAt)
+                            : 'No date',
+                      ),
+                      trailing: Text(
+                        currencyFormatter.format(billingDetails['finalTotal'] ?? 0.0),
+                        style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      children: items.map((item) {
+                        return ListTile(
+                          title: Text("${item['quantity']}x ${item['name']}"),
+                          trailing: Text(
+                            currencyFormatter.format((item['price'] as num? ?? 0.0) * (item['quantity'] as num? ?? 0)),
+                          ),
+                        );
+                      }).toList(),
+                    );
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TopSellingItemsSheet extends StatelessWidget {
+  final List<ProductPerformance> topSellingItems;
+  final ScrollController scrollController;
+
+  const _TopSellingItemsSheet({required this.topSellingItems, required this.scrollController});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.scaffoldBackgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          // Draggable handle and close button
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 40,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Top Selling Items', style: theme.textTheme.headlineSmall),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 24),
+          Expanded(
+            child: ListView.builder(
+              controller: scrollController,
+              itemCount: topSellingItems.length,
+              itemBuilder: (context, index) {
+                final item = topSellingItems[index];
+                return ListTile(
+                  leading: CircleAvatar(
+                    child: Text('${index + 1}'),
+                  ),
+                  title: Text(item.itemName, style: theme.textTheme.titleMedium),
+                  trailing: Text(
+                    '${item.unitsSold} units',
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold, color: theme.primaryColor),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SupplierSpendingDetailsSheet extends StatelessWidget {
+  final Map<String, double> supplierSpendings;
+  final ScrollController scrollController;
+
+  const _SupplierSpendingDetailsSheet({required this.supplierSpendings, required this.scrollController});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final sortedEntries = supplierSpendings.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final currencyFormatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.scaffoldBackgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          // Draggable handle and close button
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 40,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Supplier Spending Details',
+                    style: theme.textTheme.headlineSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 24),
+          Expanded(
+            child: ListView.builder(
+              controller: scrollController,
+              itemCount: sortedEntries.length,
+              itemBuilder: (context, index) {
+                final entry = sortedEntries[index];
+                return ListTile(
+                  title: Text(entry.key, style: theme.textTheme.titleMedium),
+                  trailing: Text(
+                    currencyFormatter.format(entry.value),
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold, color: theme.primaryColor),
+                  ),
+                );
+              },
+            ),
           ),
         ],
       ),

@@ -1,5 +1,3 @@
-
-
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cravy/screen/restaurant/inventory/inventory_screen.dart'
@@ -203,15 +201,10 @@ class _AddEditOptionDialogState extends State<_AddEditOptionDialog> {
 
   void _saveOption() {
     if (_formKey.currentState!.validate()) {
-      if (_selectedRecipeLink == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Please link an inventory item.')));
-        return;
-      }
       final newOption = OptionItem(
         name: _nameController.text.trim(),
         additionalPrice: double.tryParse(_priceController.text) ?? 0.0,
-        recipeLink: _selectedRecipeLink!,
+        recipeLink: _selectedRecipeLink ?? RecipeItem.empty(),
       );
       Navigator.of(context).pop(newOption);
     }

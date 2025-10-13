@@ -13,6 +13,14 @@ class CustomerInfo {
   String phone;
   CustomerInfo({required this.id, required this.name, required this.phone});
   Map<String, dynamic> toMap() => {'id': id, 'name': name, 'phone': phone};
+
+  factory CustomerInfo.fromMap(Map<String, dynamic> map) {
+    return CustomerInfo(
+      id: map['id'] ?? '',
+      name: map['name'] ?? '',
+      phone: map['phone'] ?? '',
+    );
+  }
 }
 
 class CreateOrderScreen extends StatefulWidget {
@@ -228,7 +236,9 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
         DropdownButtonFormField<String>(
           value: _orderType,
           decoration: const InputDecoration(labelText: 'Order Type'),
-          items: ['Dine-In', 'Takeaway', 'Delivery'].map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
+          items: ['Dine-In', 'Takeaway', 'Delivery', 'Guest']
+              .map((type) => DropdownMenuItem(value: type, child: Text(type)))
+              .toList(),
           onChanged: (value) => setState(() {
             _orderType = value!;
             if (_orderType != 'Dine-In') _assignment = null;
