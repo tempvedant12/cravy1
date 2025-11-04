@@ -71,6 +71,10 @@ class _AddEditMenuItemScreenState extends State<AddEditMenuItemScreen> {
     _itemType = widget.menuItem?.type ?? 'veg'; // Default to 'veg'
     _targetMenuIds = {widget.menuId};
 
+    if (widget.menuItem != null) {
+      _isTypeLocked = true;
+    }
+
     _categorySuggestionsFuture = _fetchCategorySuggestions();
     _determineAndSetItemType();
   }

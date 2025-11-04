@@ -47,12 +47,17 @@ class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateM
   final List<String> _tabPeriods = ['All', 'Today', 'This Week', 'This Month', 'This Year', 'Custom'];
   List<MenuItem> _allMenuItems = [];
 
+  // --- NEW: Add state for business day start time ---
+  TimeOfDay _businessDayStartTime = const TimeOfDay(hour: 0, minute: 0); // Default 12:00 AM
+  bool _isLoadingSettings = true;
+  // --------------------------------------------------
+
   @override
   void initState() {
     super.initState();
     _tabs = _buildTabs();
     _tabController = TabController(length: _tabs.length, vsync: this);
-    _reportDataFuture = _loadData();
+    _reportDataFuture = _loadData(); // <-- This will now call _loadInitialSettings first
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) {
         if (_tabPeriods[_tabController.index] == 'Custom') {
@@ -74,9 +79,44 @@ class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateM
     super.dispose();
   }
 
+  // --- NEW: Helper function to load all settings first ---
+  Future<void> _loadInitialSettings() async {
+    if (mounted) {
+      setState(() => _isLoadingSettings = true);
+    }
+    try {
+      // 1. Fetch Restaurant Settings (for day start time)
+      final doc = await FirebaseFirestore.instance
+          .collection('restaurants')
+          .doc(widget.restaurantId)
+          .get();
+
+      if (doc.exists && doc.data()!.containsKey('businessDayStartTime')) {
+        final timeString = doc.data()!['businessDayStartTime'] as String; // e.g., "05:00"
+        final parts = timeString.split(':');
+        _businessDayStartTime = TimeOfDay(
+            hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+      } else {
+        _businessDayStartTime = const TimeOfDay(hour: 0, minute: 0); // Default to midnight
+      }
+
+      // 2. Fetch All Menu Items (for category reports)
+      if (_allMenuItems.isEmpty) {
+        await _fetchAllMenuItems();
+      }
+
+    } catch (e) {
+      print("Error loading report settings: $e");
+    }
+    if (mounted) {
+      setState(() => _isLoadingSettings = false);
+    }
+  }
+
   Future<Map<String, dynamic>> _loadData([String? period]) async {
-    if (_allMenuItems.isEmpty) {
-      await _fetchAllMenuItems();
+    // Ensure settings are loaded before fetching report data
+    if (_isLoadingSettings || _allMenuItems.isEmpty) {
+      await _loadInitialSettings();
     }
     return _fetchReportData(period ?? _tabPeriods[_tabController.index], customRange: _customDateRange);
   }
@@ -142,28 +182,59 @@ class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateM
     }
   }
 
-  Future<Map<String, dynamic>> _fetchReportData(String period, {DateTimeRange? customRange}) async {
-    DateTimeRange? dateRange = customRange;
-    final now = DateTime.now();
+  // --- *** MAJOR LOGIC CHANGE *** ---
+  // This new helper function calculates the "business day" date range.
+  DateTimeRange _getBusinessDateRange(String period, TimeOfDay dayStartTime, {DateTimeRange? customRange}) {
+    DateTime now = DateTime.now();
 
-    if (dateRange == null && period != 'All') {
-      switch (period) {
-        case 'Today':
-          dateRange = DateTimeRange(start: DateTime(now.year, now.month, now.day), end: now);
-          break;
-        case 'This Week':
-          final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
-          dateRange = DateTimeRange(start: DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day), end: now);
-          break;
-        case 'This Month':
-          dateRange = DateTimeRange(start: DateTime(now.year, now.month, 1), end: now);
-          break;
-        case 'This Year':
-          dateRange = DateTimeRange(start: DateTime(now.year, 1, 1), end: now);
-          break;
-      }
+    // Define the start of today's *business day*
+    DateTime todayBusinessStart = DateTime(now.year, now.month, now.day, dayStartTime.hour, dayStartTime.minute);
+
+    // If it's currently 3 AM but the day starts at 5 AM, "now" is still *yesterday's* business day.
+    if (now.isBefore(todayBusinessStart)) {
+      // The current business day started yesterday.
+      todayBusinessStart = todayBusinessStart.subtract(const Duration(days: 1));
     }
 
+    // The end of the business day is exactly 24 hours after the start.
+    DateTime todayBusinessEnd = todayBusinessStart.add(const Duration(days: 1));
+
+    switch (period) {
+      case 'Today':
+        return DateTimeRange(start: todayBusinessStart, end: todayBusinessEnd);
+      case 'This Week':
+      // Find the start of the week relative to the *business day*
+        final daysToSubtract = todayBusinessStart.weekday - 1; // 1 (Mon) - 1 = 0; 7 (Sun) - 1 = 6
+        final startOfWeek = todayBusinessStart.subtract(Duration(days: daysToSubtract));
+        return DateTimeRange(start: startOfWeek, end: todayBusinessEnd);
+      case 'This Month':
+        final startOfMonth = DateTime(todayBusinessStart.year, todayBusinessStart.month, 1, dayStartTime.hour, dayStartTime.minute);
+        return DateTimeRange(start: startOfMonth, end: todayBusinessEnd);
+      case 'This Year':
+        final startOfYear = DateTime(todayBusinessStart.year, 1, 1, dayStartTime.hour, dayStartTime.minute);
+        return DateTimeRange(start: startOfYear, end: todayBusinessEnd);
+      case 'Custom':
+        if (customRange != null) {
+          // Adjust the custom range to align with business day start/end
+          final customStart = DateTime(customRange.start.year, customRange.start.month, customRange.start.day, dayStartTime.hour, dayStartTime.minute);
+          final customEnd = DateTime(customRange.end.year, customRange.end.month, customRange.end.day, dayStartTime.hour, dayStartTime.minute)
+              .add(const Duration(days: 1)); // Go to the *start* of the next day
+          return DateTimeRange(start: customStart, end: customEnd);
+        }
+        return DateTimeRange(start: todayBusinessStart, end: todayBusinessEnd); // Fallback for custom
+      case 'All':
+      default:
+      // 'All' time doesn't need a range, the query will handle it.
+        return DateTimeRange(start: DateTime(2020), end: DateTime(2099));
+    }
+  }
+
+  Future<Map<String, dynamic>> _fetchReportData(String period, {DateTimeRange? customRange}) async {
+    // Get the correct date range based on business logic
+    DateTimeRange? dateRange;
+    if (period != 'All') {
+      dateRange = _getBusinessDateRange(period, _businessDayStartTime, customRange: customRange);
+    }
 
     Query salesQuery = FirebaseFirestore.instance
         .collection('restaurants')
@@ -172,11 +243,12 @@ class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateM
         .where('isPaid', isEqualTo: true);
 
     if (dateRange != null) {
+      // Use the calculated business day range for the query
       salesQuery = salesQuery.where('billingDetails.billedAt', isGreaterThanOrEqualTo: dateRange.start)
-          .where('billingDetails.billedAt', isLessThanOrEqualTo: dateRange.end.add(const Duration(days: 1)));
+          .where('billingDetails.billedAt', isLessThan: dateRange.end); // Use isLessThan
     }
 
-
+    // ... (rest of the function is identical to your original, no changes needed)
     final salesSnapshot = await salesQuery.get();
 
     double totalRevenue = 0;
@@ -206,7 +278,14 @@ class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateM
 
       final billedAt = (data['billingDetails']?['billedAt'] as Timestamp?)?.toDate();
       if (billedAt != null) {
-        final dateKey = DateFormat('MMM d').format(billedAt);
+        // --- LOGIC CHANGE: Group by business day, not calendar day ---
+        // Find the start of the business day this bill belongs to
+        DateTime businessDayStartForBill = DateTime(billedAt.year, billedAt.month, billedAt.day, _businessDayStartTime.hour, _businessDayStartTime.minute);
+        if (billedAt.isBefore(businessDayStartForBill)) {
+          businessDayStartForBill = businessDayStartForBill.subtract(const Duration(days: 1));
+        }
+        final dateKey = DateFormat('MMM d').format(businessDayStartForBill);
+        // -------------------------------------------------------------
         dailyTimeSeriesRevenue.update(dateKey, (value) => value + finalTotal, ifAbsent: () => finalTotal);
       }
 
@@ -283,6 +362,36 @@ class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateM
       'supplierSpendings': supplierSpendings,
     };
   }
+
+  // --- ADDED: A way to *change* the setting from the reports screen ---
+  Future<void> _showDayStartTimePicker() async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: _businessDayStartTime,
+      helpText: 'Select your business day start time',
+    );
+    if (picked != null && picked != _businessDayStartTime) {
+      // Save it to Firestore
+      final formattedTime =
+          '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
+      await FirebaseFirestore.instance
+          .collection('restaurants')
+          .doc(widget.restaurantId)
+          .update({'businessDayStartTime': formattedTime});
+
+      // Update state and reload data
+      setState(() {
+        _businessDayStartTime = picked;
+        _reportDataFuture = _loadData();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Business day start time updated to ${picked.format(context)}')),
+      );
+    }
+  }
+
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -305,6 +414,13 @@ class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateM
                   backgroundColor: isDark ? const Color(0xFF14141E).withOpacity(0.9) : Colors.white.withOpacity(0.95),
                   elevation: 0,
                   actions: [
+                    // --- NEW BUTTON TO CHANGE THE SETTING ---
+                    IconButton(
+                      icon: const Icon(Icons.av_timer_outlined),
+                      onPressed: _showDayStartTimePicker,
+                      tooltip: 'Set Business Day Start Time',
+                    ),
+                    // ---------------------------------------
                     if (_customDateRange != null)
                       IconButton(
                         icon: const Icon(Icons.refresh),
@@ -323,7 +439,7 @@ class _ReportsScreenState extends State<ReportsScreen> with TickerProviderStateM
             body: FutureBuilder<Map<String, dynamic>>(
               future: _reportDataFuture,
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
+                if (snapshot.connectionState == ConnectionState.waiting || _isLoadingSettings) { // <-- Check for setting load
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {

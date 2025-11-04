@@ -1,6 +1,9 @@
+// lib/screen/restaurant/EditRestaurantScreen.dart
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cravy/screen/restaurant/restaurant_screen.dart';
+import 'package:intl/intl.dart'; // <-- ADD THIS IMPORT
 
 class EditRestaurantScreen extends StatefulWidget {
   final Restaurant restaurant;
@@ -17,12 +20,44 @@ class _EditRestaurantScreenState extends State<EditRestaurantScreen> {
   late TextEditingController _addressController;
   bool _isLoading = false;
 
+  // --- ADD NEW STATE FOR DAY START TIME ---
+  TimeOfDay _dayStartTime = const TimeOfDay(hour: 0, minute: 0); // Default 12:00 AM
+  bool _isFetchingTime = true;
+  // ----------------------------------------
+
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.restaurant.name);
     _addressController = TextEditingController(text: widget.restaurant.address);
+    // --- ADD FUNCTION TO FETCH THE TIME ---
+    _fetchRestaurantSettings();
+    // --------------------------------------
   }
+
+  // --- ADD NEW FUNCTION ---
+  Future<void> _fetchRestaurantSettings() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('restaurants')
+          .doc(widget.restaurant.id)
+          .get();
+
+      if (doc.exists && doc.data()!.containsKey('businessDayStartTime')) {
+        final timeString = doc.data()!['businessDayStartTime'] as String; // e.g., "05:00"
+        final parts = timeString.split(':');
+        _dayStartTime = TimeOfDay(
+            hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+      }
+    } catch (e) {
+      // Handle error, for now, just use default
+      print("Error fetching day start time: $e");
+    }
+    if (mounted) {
+      setState(() => _isFetchingTime = false);
+    }
+  }
+  // -------------------------
 
   @override
   void dispose() {
@@ -35,13 +70,20 @@ class _EditRestaurantScreenState extends State<EditRestaurantScreen> {
     if (_formKey.currentState!.validate()) {
       setState(() => _isLoading = true);
       try {
+        // --- UPDATE: Save the new time setting ---
+        final formattedTime =
+            '${_dayStartTime.hour.toString().padLeft(2, '0')}:${_dayStartTime.minute.toString().padLeft(2, '0')}';
+
         await FirebaseFirestore.instance
             .collection('restaurants')
             .doc(widget.restaurant.id)
             .update({
           'name': _nameController.text.trim(),
           'address': _addressController.text.trim(),
+          'businessDayStartTime': formattedTime, // <-- SAVE THE SETTING
         });
+        // ----------------------------------------
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Restaurant details updated!')),
@@ -63,6 +105,7 @@ class _EditRestaurantScreenState extends State<EditRestaurantScreen> {
   }
 
   Future<void> _deleteRestaurant() async {
+    // ... (existing delete code, no changes needed)
     final bool? confirm = await showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -133,6 +176,7 @@ class _EditRestaurantScreenState extends State<EditRestaurantScreen> {
   }
 
   Future<void> _deleteSubcollection(CollectionReference subcollection) async {
+    // ... (existing delete code, no changes needed)
     final snapshot = await subcollection.limit(500).get();
     if (snapshot.docs.isEmpty) {
       return;
@@ -146,6 +190,19 @@ class _EditRestaurantScreenState extends State<EditRestaurantScreen> {
     await _deleteSubcollection(subcollection);
   }
 
+  // --- ADD NEW FUNCTION ---
+  Future<void> _selectDayStartTime() async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: _dayStartTime,
+    );
+    if (picked != null && picked != _dayStartTime) {
+      setState(() {
+        _dayStartTime = picked;
+      });
+    }
+  }
+  // -------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -173,6 +230,24 @@ class _EditRestaurantScreenState extends State<EditRestaurantScreen> {
                 validator: (value) =>
                 value!.trim().isEmpty ? 'Please enter an address' : null,
               ),
+              const SizedBox(height: 16),
+              // --- ADD NEW UI WIDGET ---
+              if (_isFetchingTime)
+                const Center(child: CircularProgressIndicator())
+              else
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.av_timer_outlined),
+                  title: const Text('Business Day Start Time'),
+                  subtitle: Text(
+                      'Reports will be calculated from this time (e.g., 5:00 AM to 5:00 AM).'),
+                  trailing: Text(
+                    _dayStartTime.format(context),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  onTap: _selectDayStartTime,
+                ),
+              // -------------------------
               const Spacer(),
               if (_isLoading)
                 const Center(child: CircularProgressIndicator())

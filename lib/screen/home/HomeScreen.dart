@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cravy/screen/theme/theme_screen.dart';
 import 'package:cravy/services/auth_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:intl/intl.dart';
 
@@ -29,6 +30,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
+  final FocusNode _mainFocusNode = FocusNode();
+  int _focusedRestaurantIndex = 0; // Tracks the highlighted item
+
   late final Stream<QuerySnapshot> _restaurantsStream;
 
   @override
@@ -45,6 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _mainFocusNode.dispose();
     super.dispose();
   }
 
@@ -78,10 +83,11 @@ class _HomeScreenState extends State<HomeScreen> {
               if (snapshot.hasError) {
                 return Center(child: Text('Error: ${snapshot.error}'));
               }
+
               final allRestaurants = snapshot.data?.docs
                   .map((doc) => Restaurant.fromFirestore(doc))
-                  .toList() ??
-                  [];
+                  .toList() ?? [];
+
 
               final filteredRestaurants = allRestaurants.where((restaurant) {
                 return restaurant.name
@@ -89,15 +95,64 @@ class _HomeScreenState extends State<HomeScreen> {
                     .contains(_searchQuery.toLowerCase());
               }).toList();
 
-              return LayoutBuilder(builder: (context, constraints) {
-                if (constraints.maxWidth < _desktopBreakpoint) {
-                  return _buildMobileLayout(
-                      context, filteredRestaurants, _scaffoldKey);
-                } else {
-                  return _buildDesktopLayout(
-                      context, filteredRestaurants, _scaffoldKey);
-                }
-              });
+              return Focus(
+                focusNode: _mainFocusNode,
+                autofocus: true,
+                onKey: (FocusNode node, RawKeyEvent event) {
+                  if (event is RawKeyDownEvent) {
+                    final int totalItems = filteredRestaurants.length;
+                    if (totalItems == 0) return KeyEventResult.ignored;
+
+                    // Get grid columns for desktop layout
+                    final double screenWidth = MediaQuery.of(context).size.width;
+                    bool isDesktop = screenWidth >= _desktopBreakpoint;
+                    int crossAxisCount = 1; // Default for mobile list
+                    if (isDesktop) {
+                      crossAxisCount = (screenWidth / 420).floor();
+                    }
+
+                    setState(() {
+                      if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                        // Move right
+                        _focusedRestaurantIndex = (_focusedRestaurantIndex + 1) % totalItems;
+                      } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                        // Move left
+                        _focusedRestaurantIndex = (_focusedRestaurantIndex - 1 + totalItems) % totalItems;
+                      } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                        // Move down
+                        int newIndex = _focusedRestaurantIndex + crossAxisCount;
+                        _focusedRestaurantIndex = (newIndex < totalItems) ? newIndex : totalItems - 1;
+                      } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                        // Move up
+                        int newIndex = _focusedRestaurantIndex - crossAxisCount;
+                        _focusedRestaurantIndex = (newIndex >= 0) ? newIndex : 0;
+                      } else if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+                        // Trigger the action
+                        _navigateTo(
+                          context,
+                          RestaurantDashboardScreen(
+                            restaurant: filteredRestaurants[_focusedRestaurantIndex],
+                          ),
+                        );
+                      }
+
+                      // Ensure index is always valid
+                      _focusedRestaurantIndex = _focusedRestaurantIndex.clamp(0, totalItems - 1);
+                    });
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                },
+                child: LayoutBuilder(builder: (context, constraints) {
+                  if (constraints.maxWidth < _desktopBreakpoint) {
+                    return _buildMobileLayout(
+                        context, filteredRestaurants, _scaffoldKey,_focusedRestaurantIndex);
+                  } else {
+                    return _buildDesktopLayout(
+                        context, filteredRestaurants, _scaffoldKey,_focusedRestaurantIndex);
+                  }
+                }),
+              );
             },
           ),
         ],
@@ -119,7 +174,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// The original layout, optimized for mobile screens.
   Widget _buildMobileLayout(BuildContext context, List<Restaurant> restaurants,
-      GlobalKey<ScaffoldState> scaffoldKey) {
+      GlobalKey<ScaffoldState> scaffoldKey, int focusedIndex) {
     return CustomScrollView(
       slivers: [
         _CustomSliverAppBar(scaffoldKey: scaffoldKey),
@@ -153,7 +208,7 @@ class _HomeScreenState extends State<HomeScreen> {
         else
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-            sliver: _RestaurantList(restaurants: restaurants),
+            sliver: _RestaurantList(restaurants: restaurants,focusedIndex: focusedIndex),
           ),
       ],
     );
@@ -161,7 +216,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// A new dashboard-style layout for web and desktop.
   Widget _buildDesktopLayout(BuildContext context, List<Restaurant> restaurants,
-      GlobalKey<ScaffoldState> scaffoldKey) {
+      GlobalKey<ScaffoldState> scaffoldKey, int focusedIndex) {
     return Row(
       children: [
         Expanded(
@@ -187,6 +242,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     restaurants: restaurants,
                     crossAxisCount:
                     (MediaQuery.of(context).size.width / 420).floor(),
+                      focusedIndex: focusedIndex
                   ),
                 ),
             ],
@@ -291,7 +347,9 @@ class _RestaurantSectionHeader extends StatelessWidget {
 
 class _RestaurantList extends StatelessWidget {
   final List<Restaurant> restaurants;
-  const _RestaurantList({required this.restaurants});
+  final int focusedIndex;
+
+  const _RestaurantList({required this.restaurants, required this.focusedIndex});
 
   @override
   Widget build(BuildContext context) {
@@ -304,7 +362,7 @@ class _RestaurantList extends StatelessWidget {
           child: SlideAnimation(
             verticalOffset: 50.0,
             child: FadeInAnimation(
-              child: RestaurantCard(restaurant: restaurants[index]),
+              child: RestaurantCard(restaurant: restaurants[index],isFocused: index == focusedIndex,),
             ),
           ),
         ),
@@ -316,8 +374,10 @@ class _RestaurantList extends StatelessWidget {
 class _RestaurantGrid extends StatelessWidget {
   final List<Restaurant> restaurants;
   final int crossAxisCount;
+  final int focusedIndex;
+
   const _RestaurantGrid(
-      {required this.restaurants, required this.crossAxisCount});
+      {required this.restaurants, required this.crossAxisCount,required this.focusedIndex,});
 
   @override
   Widget build(BuildContext context) {
@@ -337,7 +397,7 @@ class _RestaurantGrid extends StatelessWidget {
             columnCount: crossAxisCount,
             child: ScaleAnimation(
               child: FadeInAnimation(
-                child: RestaurantCard(restaurant: restaurants[index]),
+                child: RestaurantCard(restaurant: restaurants[index],isFocused: index == focusedIndex,),
               ),
             ),
           );
@@ -735,7 +795,9 @@ class BenefitCard extends StatelessWidget {
 
 class RestaurantCard extends StatefulWidget {
   final Restaurant restaurant;
-  const RestaurantCard({super.key, required this.restaurant});
+  final bool isFocused;
+
+  const RestaurantCard({super.key, required this.restaurant,this.isFocused = false,});
 
   @override
   State<RestaurantCard> createState() => _RestaurantCardState();
@@ -747,6 +809,8 @@ class _RestaurantCardState extends State<RestaurantCard> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    final bool isHighlighted = _isHovered || widget.isFocused;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
@@ -772,10 +836,10 @@ class _RestaurantCardState extends State<RestaurantCard> {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(
-                    color: _isHovered
+                    color: isHighlighted // <--- USE HIGHLIGHTED STATE
                         ? theme.primaryColor.withOpacity(0.5)
                         : Colors.white.withOpacity(0.2),
-                    width: 1.5,
+                    width: isHighlighted ? 2.5 : 1.5, // <--- Make focus thicker
                   ),
                   gradient: LinearGradient(
                     colors: [
