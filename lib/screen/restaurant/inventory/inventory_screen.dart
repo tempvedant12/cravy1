@@ -145,6 +145,25 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
+  bool _fuzzySearch(String text, String query) {
+    var queryChars = query.toLowerCase().runes.iterator;
+    var textChars = text.toLowerCase().runes.iterator;
+
+    if (!queryChars.moveNext()) {
+      return true; // Empty query matches everything
+    }
+
+    while (textChars.moveNext()) {
+      if (textChars.current == queryChars.current) {
+        if (!queryChars.moveNext()) {
+          return true; // All query chars were found in order
+        }
+      }
+    }
+    // If we finished the text but not the query, it's not a match.
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -180,13 +199,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
               final displayedItems = allItems.where((item) {
                 final categoryMatch = _selectedCategory == 'All Items' ||
                     item.category == _selectedCategory;
-                final searchMatch = item.name
-                    .toLowerCase()
-                    .contains(_searchQuery.toLowerCase());
+                final searchMatch = _fuzzySearch(item.name, _searchQuery); // <-- CHANGE IS HERE
                 final typeMatch = _selectedTypeFilter == 'All' ||
                     item.type == _selectedTypeFilter;
                 return categoryMatch && searchMatch && typeMatch;
               }).toList();
+
 
               return LayoutBuilder(builder: (context, constraints) {
                 if (constraints.maxWidth < 800) {

@@ -468,6 +468,25 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
   }
   // ************************************
 
+  bool _fuzzySearch(String text, String query) {
+    var queryChars = query.toLowerCase().runes.iterator;
+    var textChars = text.toLowerCase().runes.iterator;
+
+    if (!queryChars.moveNext()) {
+      return true; // Empty query matches everything
+    }
+
+    while (textChars.moveNext()) {
+      if (textChars.current == queryChars.current) {
+        if (!queryChars.moveNext()) {
+          return true; // All query chars were found in order
+        }
+      }
+    }
+    // If we finished the text but not the query, it's not a match.
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
@@ -498,7 +517,7 @@ class _MenuContentState extends State<_MenuContent> with TickerProviderStateMixi
         final newTabCategories = ['All', ...categories];
 
         final List<MenuItem> filteredItems = allItems.where((item) {
-          final searchMatch = item.name.toLowerCase().contains(_searchQuery.toLowerCase());
+          final searchMatch = _fuzzySearch(item.name, _searchQuery); // <-- CHANGE IS HERE
           final typeMatch = _selectedFoodType == 'All' || item.type == _selectedFoodType;
           return searchMatch && typeMatch;
         }).toList();

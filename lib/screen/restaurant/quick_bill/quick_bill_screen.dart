@@ -259,6 +259,25 @@ class _QuickBillScreenState extends State<QuickBillScreen>
     }
   }
 
+  bool _fuzzySearch(String text, String query) {
+    var queryChars = query.toLowerCase().runes.iterator;
+    var textChars = text.toLowerCase().runes.iterator;
+
+    if (!queryChars.moveNext()) {
+      return true; // Empty query matches everything
+    }
+
+    while (textChars.moveNext()) {
+      if (textChars.current == queryChars.current) {
+        if (!queryChars.moveNext()) {
+          return true; // All query chars were found in order
+        }
+      }
+    }
+    // If we finished the text but not the query, it's not a match.
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -316,8 +335,7 @@ class _QuickBillScreenState extends State<QuickBillScreen>
         : _allMenuItems.where((item) => item.menuId == _selectedMenuId).toList();
 
     final filteredItems = menuItems
-        .where((item) =>
-        item.name.toLowerCase().contains(_searchQuery.toLowerCase()))
+        .where((item) => _fuzzySearch(item.name, _searchQuery))
         .toList();
 
     final categories =

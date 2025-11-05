@@ -590,6 +590,25 @@ class _MenuContentState extends State<_MenuContent>
     widget.onItemSelected(newItem);
   }
 
+  bool _fuzzySearch(String text, String query) {
+    var queryChars = query.toLowerCase().runes.iterator;
+    var textChars = text.toLowerCase().runes.iterator;
+
+    if (!queryChars.moveNext()) {
+      return true; // Empty query matches everything
+    }
+
+    while (textChars.moveNext()) {
+      if (textChars.current == queryChars.current) {
+        if (!queryChars.moveNext()) {
+          return true; // All query chars were found in order
+        }
+      }
+    }
+    // If we finished the text but not the query, it's not a match.
+    return false;
+  }
+
   void _directRemoveOne(MenuItem item) {
     widget.onRemoveOne(item);
   }
@@ -619,9 +638,7 @@ class _MenuContentState extends State<_MenuContent>
           }).toList();
 
           final searchAndTypeFilteredItems = typeFilteredItems.where((item) {
-            return item.name
-                .toLowerCase()
-                .contains(_searchQuery.toLowerCase());
+            return _fuzzySearch(item.name, _searchQuery);
           }).toList();
 
           return Column(
