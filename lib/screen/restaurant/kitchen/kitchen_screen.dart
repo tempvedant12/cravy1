@@ -1,11 +1,28 @@
-
-
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cravy/screen/restaurant/kitchen/kitchen_session_detail_screen.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 
 import '../tables_and_reservations/tables_and_reservations_screen.dart';
+
+// --- ADDED KitchenItem class from detail screen ---
+class KitchenItem {
+  final String orderId;
+  final String menuItemId;
+  final String name;
+  final int quantity;
+  String status;
+  final String orderType;
+
+  KitchenItem({
+    required this.orderId,
+    required this.menuItemId,
+    required this.name,
+    required this.quantity,
+    required this.status,
+    required this.orderType,
+  });
+}
+// ------------------------------------------------
 
 class KitchenScreen extends StatefulWidget {
   final String restaurantId;
@@ -74,13 +91,12 @@ class _KitchenScreenState extends State<KitchenScreen> {
   }
 
   Widget _buildSessionList({String? floorName}) {
-    
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('restaurants')
           .doc(widget.restaurantId)
           .collection('orders')
-          .where('isSessionActive', isEqualTo: true) 
+          .where('isSessionActive', isEqualTo: true)
           .orderBy('createdAt')
           .snapshots(),
       builder: (context, snapshot) {
@@ -119,17 +135,13 @@ class _KitchenScreenState extends State<KitchenScreen> {
             final sessionOrders = groupedOrders[sessionKey]!;
             return Padding(
               padding: const EdgeInsets.only(bottom: 16.0),
+              // --- MODIFIED CARD ---
               child: _KitchenSessionCard(
+                restaurantId: widget.restaurantId, // Pass restaurantId
                 sessionOrders: sessionOrders,
-                onTap: () {
-                  Navigator.of(context).push(MaterialPageRoute(
-                    builder: (context) => KitchenSessionDetailScreen(
-                      restaurantId: widget.restaurantId,
-                      sessionKey: sessionKey,
-                    ),
-                  ));
-                },
+                // No onTap needed anymore
               ),
+              // ---------------------
             );
           },
         );
@@ -138,94 +150,260 @@ class _KitchenScreenState extends State<KitchenScreen> {
   }
 }
 
-class _KitchenSessionCard extends StatelessWidget {
+// --- WIDGET REBUILT AS STATEFUL ---
+class _KitchenSessionCard extends StatefulWidget {
   final List<DocumentSnapshot> sessionOrders;
-  final VoidCallback onTap;
+  final String restaurantId;
 
-  const _KitchenSessionCard({required this.sessionOrders, required this.onTap});
+  const _KitchenSessionCard({
+    required this.sessionOrders,
+    required this.restaurantId,
+  });
+
+  @override
+  State<_KitchenSessionCard> createState() => _KitchenSessionCardState();
+}
+
+class _KitchenSessionCardState extends State<_KitchenSessionCard> {
+  // --- Logic moved from KitchenSessionDetailScreen ---
+
+  Future<void> _updateItemStatus(
+      String orderId, String menuItemId, String newStatus) async {
+    final orderRef = FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('orders')
+        .doc(orderId);
+
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+      final snapshot = await transaction.get(orderRef);
+      if (!snapshot.exists) return;
+
+      final data = snapshot.data() as Map<String, dynamic>;
+      final items = List<Map<String, dynamic>>.from(data['items']);
+      final itemIndex =
+      items.indexWhere((item) => item['menuItemId'] == menuItemId);
+
+      if (itemIndex != -1) {
+        items[itemIndex]['status'] = newStatus;
+
+        final allItemsCompleted =
+        items.every((item) => item['status'] == 'Completed');
+        final newOrderStatus = allItemsCompleted ? 'Completed' : 'Pending';
+
+        transaction.update(orderRef, {'items': items, 'status': newOrderStatus});
+      }
+    });
+  }
+
+  Widget _buildActionButton(KitchenItem item, {bool isCompleted = false}) {
+    if (isCompleted) {
+      return PopupMenuButton<String>(
+        onSelected: (value) {
+          _updateItemStatus(item.orderId, item.menuItemId, value);
+        },
+        itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+          const PopupMenuItem<String>(
+            value: 'Pending',
+            child: Text('Remake Item'),
+          ),
+          const PopupMenuItem<String>(
+            value: 'Making',
+            child: Text('Revert to Making'),
+          ),
+        ],
+        child: const Icon(Icons.check_circle, color: Colors.green),
+      );
+    }
+
+    if (item.status == 'Pending') {
+      return GestureDetector(
+        onTap: () =>
+            _updateItemStatus(item.orderId, item.menuItemId, 'Making'),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.orange,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Text('Start', style: TextStyle(color: Colors.white)),
+        ),
+      );
+    }
+    if (item.status == 'Making') {
+      String completeActionText;
+      switch (item.orderType) {
+        case 'Takeaway':
+          completeActionText = 'Ready for Pickup';
+          break;
+        case 'Delivery':
+          completeActionText = 'Out for Delivery';
+          break;
+        default:
+          completeActionText = 'Send to Table';
+      }
+
+      return PopupMenuButton<String>(
+        onSelected: (value) {
+          _updateItemStatus(item.orderId, item.menuItemId, value);
+        },
+        itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+          PopupMenuItem<String>(
+            value: 'Completed',
+            child: Text(completeActionText),
+          ),
+          const PopupMenuDivider(),
+          const PopupMenuItem<String>(
+            value: 'Pending',
+            child: Text('Revert to Pending'),
+          ),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.green,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Text('Done', style: TextStyle(color: Colors.white)),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  Widget _buildItemTile(KitchenItem item, {bool isCompleted = false}) {
+    return ListTile(
+      title: Text('${item.quantity}x ${item.name}'),
+      trailing: _buildActionButton(item, isCompleted: isCompleted),
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+    );
+  }
+
+  // --- End of logic from KitchenSessionDetailScreen ---
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final data = sessionOrders.first.data() as Map<String, dynamic>;
+    final data = widget.sessionOrders.first.data() as Map<String, dynamic>;
     final sessionKey = data['sessionKey'] as String? ?? 'N/A';
 
-    final allItems = sessionOrders
-        .expand((doc) => List<Map<String, dynamic>>.from(
-        (doc.data() as Map<String, dynamic>)['items'] ?? []))
+    // --- Processing logic from detail screen's builder ---
+    final allItems = <KitchenItem>[];
+    for (var doc in widget.sessionOrders) {
+      final docData = doc.data() as Map<String, dynamic>;
+      final itemsList =
+      List<Map<String, dynamic>>.from(docData['items'] ?? []);
+      for (var itemData in itemsList) {
+        allItems.add(KitchenItem(
+          orderId: doc.id,
+          menuItemId: itemData['menuItemId'],
+          name: itemData['name'],
+          quantity: itemData['quantity'],
+          status: itemData['status'] ?? 'Pending',
+          orderType: docData['orderType'] ?? 'Dine-In',
+        ));
+      }
+    }
+
+    final todoItems = allItems
+        .where((item) => item.status == 'Pending' || item.status == 'Making')
         .toList();
+    final completedItems =
+    allItems.where((item) => item.status == 'Completed').toList();
 
-    final pendingItems =
-    allItems.where((i) => (i['status'] ?? 'Pending') == 'Pending').toList();
-    final isMaking = allItems.any((i) => i['status'] == 'Making');
+    final pendingCount = allItems.where((i) => i.status == 'Pending').length;
+    final makingCount = allItems.where((i) => i.status == 'Making').length;
 
-    Color cardColor =
-    isMaking ? Colors.orange.withOpacity(0.1) : theme.cardColor;
+    Color cardColor = theme.cardColor;
+    if (makingCount > 0) {
+      cardColor = Colors.orange.withOpacity(0.1);
+    } else if (pendingCount > 0) {
+      cardColor = theme.colorScheme.error.withOpacity(0.1);
+    }
+    // --- End of processing logic ---
 
     return Card(
       elevation: 4,
       color: cardColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                sessionKey,
-                style: theme.textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
-              ),
-              const Divider(height: 16),
-              if (pendingItems.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 16.0),
-                  child: Center(
-                    child: Text(
-                      isMaking
-                          ? 'All items are being prepared...'
-                          : 'No pending items.',
-                      style: theme.textTheme.titleMedium,
-                      textAlign: TextAlign.center,
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // --- NEW HEADER ---
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    sessionKey,
+                    style: theme.textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (makingCount > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4.0),
+                    child: Chip(
+                      label: Text('Making: $makingCount'),
+                      backgroundColor: Colors.orange.withOpacity(0.2),
+                      visualDensity: VisualDensity.compact,
                     ),
                   ),
-                )
-              else
-                ...pendingItems.map((item) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4.0),
-                    child: Row(
-                      children: [
-                        Text('${item['quantity']}x',
-                            style: theme.textTheme.bodyLarge
-                                ?.copyWith(fontWeight: FontWeight.bold)),
-                        const SizedBox(width: 8),
-                        Expanded(
-                            child: Text('${item['name']}',
-                                style: theme.textTheme.bodyLarge)),
-                      ],
+                if (pendingCount > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4.0),
+                    child: Chip(
+                      label: Text('Pending: $pendingCount'),
+                      backgroundColor: theme.colorScheme.error.withOpacity(0.2),
+                      visualDensity: VisualDensity.compact,
                     ),
-                  );
-                }).toList(),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: onTap,
-                  child: const Text('View Full Order'),
-                ),
+                  ),
+              ],
+            ),
+            // --- END NEW HEADER ---
+
+            const Divider(height: 16),
+
+            // --- NEW: In-line "To Do" list ---
+            if (todoItems.isNotEmpty)
+              Text("To Do", style: theme.textTheme.titleMedium),
+            if (todoItems.isEmpty && completedItems.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: Center(
+                    child: Text("All items completed!",
+                        style: theme.textTheme.titleMedium)),
               ),
+            if (todoItems.isEmpty && completedItems.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: Center(
+                    child: Text("No items in this session.",
+                        style: theme.textTheme.titleMedium)),
+              ),
+            ...todoItems.map((item) => _buildItemTile(item, isCompleted: false)),
+            // ---------------------------------
+
+            // --- NEW: In-line "Completed" list ---
+            if (completedItems.isNotEmpty) ...[
+              const Divider(height: 20),
+              Text("Completed", style: theme.textTheme.titleMedium),
+              ...completedItems
+                  .map((item) => _buildItemTile(item, isCompleted: true)),
             ],
-          ),
+            // -----------------------------------
+          ],
         ),
       ),
     );
   }
 }
+// -----------------------------------
+
 
 class _StaticBackground extends StatelessWidget {
   const _StaticBackground();

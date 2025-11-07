@@ -152,7 +152,6 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> {
       DashboardItem(title: 'Customers', icon: Icons.people_outline, screen: CustomersScreen(restaurantId: widget.restaurant.id)),
       DashboardItem(title: 'Suppliers', icon: Icons.local_shipping_outlined, screen: SuppliersScreen(restaurantId: widget.restaurant.id)), // Add the new screen here
       DashboardItem(title: 'Reports', icon: Icons.bar_chart_outlined, screen: ReportsScreen(restaurantId: widget.restaurant.id)),
-      DashboardItem(title: 'Activity Log', icon: Icons.history_outlined, screen: const PlaceholderScreen(tabName: 'Activity Log')),
       DashboardItem(
         title: 'Settings',
         icon: Icons.settings_outlined,
@@ -241,8 +240,8 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> {
                     // Let child 'Focus' widgets (like on the cards) handle Enter
                     return KeyEventResult.ignored;
                   },                  child: constraints.maxWidth < _desktopBreakpoint
-                    ? _buildMobileLayout() // <-- No longer pass index
-                    : _buildDesktopLayout(), // <-- No longer pass index
+                    ? _buildMobileLayout(constraints) // <-- No longer pass index
+                    : _buildDesktopLayout(constraints), // <-- No longer pass index
                 );
               },
             ),
@@ -253,7 +252,7 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> {
   }
 
 
-  Widget _buildMobileLayout() {
+  Widget _buildMobileLayout(BoxConstraints constraints) {
     return CustomScrollView(
       slivers: [
         SliverToBoxAdapter(
@@ -266,13 +265,14 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> {
           items: _filteredItems,
           allItems: _dashboardItems,
           onItemTap: (screen, index) => _navigateTo(screen, index),
-          // --- REMOVED focusedIndex & crossAxisCount ---
+          constraints: constraints, // <-- ADD THIS
+          isDesktop: false, // <-- ADD THIS
         ),
       ],
     );
   }
 
-  Widget _buildDesktopLayout() {
+  Widget _buildDesktopLayout(BoxConstraints constraints) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -301,7 +301,8 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> {
                   items: _filteredItems,
                   allItems: _dashboardItems,
                   onItemTap: (screen, index) => _navigateTo(screen, index),
-                  // --- REMOVED focusedIndex & crossAxisCount ---
+                  constraints: constraints, // <-- ADD THIS
+                  isDesktop: true, // <-- ADD THIS
                 ),
               ],
             ),
@@ -568,11 +569,15 @@ class _DashboardGrid extends StatelessWidget {
   final List<DashboardItem> items;
   final List<DashboardItem> allItems;
   final Function(Widget, int) onItemTap;
+  final BoxConstraints constraints; // <-- ADD THIS
+  final bool isDesktop;
 
   const _DashboardGrid({
     required this.items,
     required this.allItems,
     required this.onItemTap,
+    required this.constraints, // <-- ADD THIS
+    required this.isDesktop,
   });
 
   @override
@@ -585,22 +590,36 @@ class _DashboardGrid extends StatelessWidget {
       );
     }
 
+    // --- START DYNAMIC LOGIC ---
+    final double contentWidth = constraints.maxWidth;
+    final int crossAxisCount;
+    final double childAspectRatio;
     final double maxCardWidth = 220.0;
     final double spacing = 20.0;
-    final double contentWidth = MediaQuery.of(context).size.width;
-    // This is a simplified calculation, but good enough
-    final int crossAxisCount = (contentWidth / (maxCardWidth + spacing)).floor().clamp(1, 6);
+
+    if (!isDesktop) {
+      // Mobile logic: force 2 columns and a taller aspect ratio
+      crossAxisCount = 2;
+      childAspectRatio = 0.9; // Taller cards
+    } else {
+      // Desktop logic: calculate columns and use a wider aspect ratio
+      final double sidebarWidth = 280.0;
+      // Calculate available width *inside* the Expanded widget
+      final double gridWidth = contentWidth - sidebarWidth - (24 * 2); // 24 padding on each side
+      crossAxisCount = (gridWidth / (maxCardWidth + spacing)).floor().clamp(1, 6);
+      childAspectRatio = 1.1; // Wider cards
+    }
+    // --- END DYNAMIC LOGIC ---
 
     return SliverPadding(
       padding: const EdgeInsets.all(24.0),
       sliver: SliverGrid.builder(
         itemCount: items.length,
-        // --- 3. USE FixedCrossAxisCount to match logic ---
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: crossAxisCount,
+          crossAxisCount: crossAxisCount, // <-- Use dynamic value
           mainAxisSpacing: 20.0,
           crossAxisSpacing: 20.0,
-          childAspectRatio: 1.1,
+          childAspectRatio: childAspectRatio, // <-- Use dynamic value
         ),
         itemBuilder: (context, index) {
           final item = items[index];
@@ -608,12 +627,11 @@ class _DashboardGrid extends StatelessWidget {
           return AnimationConfiguration.staggeredGrid(
             position: index,
             duration: const Duration(milliseconds: 375),
-            columnCount: crossAxisCount, // <-- Pass calculated count
+            columnCount: crossAxisCount,
             child: ScaleAnimation(
               child: FadeInAnimation(
                 child: DashboardCard(
                   item: item,
-                  // --- REMOVED isFocused ---
                   onTap: () => onItemTap(item.screen, originalIndex),
                 ),
               ),
