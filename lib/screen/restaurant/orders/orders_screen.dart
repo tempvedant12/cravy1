@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:intl/intl.dart';
 
+import '../../../services/table_service.dart';
 import '../tables_and_reservations/tables_and_reservations_screen.dart';
 import 'order_details_screen.dart';
 
@@ -139,7 +140,7 @@ class _OrdersScreenState extends State<OrdersScreen>
                 .doc(widget.restaurantId)
                 .collection('orders')
                 .where('isSessionActive', isEqualTo: true)
-                .orderBy('createdAt', descending: true)
+                .orderBy('createdAt', descending: false)
                 .snapshots(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1129,6 +1130,7 @@ class _OrderSessionCardState extends State<_OrderSessionCard> with AutomaticKeep
       bool isFullyPaid,
       List<DocumentSnapshot> sessionOrders,
       ) {
+    final String orderType = (sessionOrders.first.data() as Map<String, dynamic>)['orderType'] ?? 'Dine-In';
     return [
       if (aggregatedPaidItems.isNotEmpty) ...[
         Text('Already Paid', style: theme.textTheme.titleSmall?.copyWith(color: Colors.green)),
@@ -1241,14 +1243,22 @@ class _OrderSessionCardState extends State<_OrderSessionCard> with AutomaticKeep
         const Center(child: Text("✅ Session Fully Paid")),
 
       const SizedBox(height: 8),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      Wrap(
+        alignment: WrapAlignment.spaceAround, // This distributes the buttons nicely
+        spacing: 8.0, // Horizontal space between buttons
+        runSpacing: 4.0, // Vertical space if they wrap
         children: [
           TextButton.icon(
             icon: const Icon(Icons.add_shopping_cart, size: 18),
             label: const Text('Add Item'),
             onPressed: () => _showAddItemsSheet(sessionOrders),
           ),
+          if (orderType == 'Dine-In')
+            TextButton.icon(
+              icon: const Icon(Icons.open_with, size: 18),
+              label: const Text('Shift Table'),
+              onPressed: () => shiftTableSession(context, widget.restaurantId, sessionOrders),
+            ),
           if (isFullyPaid)
             TextButton.icon(
               icon: const Icon(Icons.print_outlined, size: 18),
@@ -1261,7 +1271,8 @@ class _OrderSessionCardState extends State<_OrderSessionCard> with AutomaticKeep
             ),
           TextButton.icon(
             icon: Icon(Icons.close, size: 18, color: theme.colorScheme.error),
-            label: Text('Close Session', style: TextStyle(color: theme.colorScheme.error)),
+            // I also shortened "Close Session" to "Close" to help save space
+            label: Text('Close', style: TextStyle(color: theme.colorScheme.error)),
             onPressed: () => _closeSession(sessionOrders),
           ),
         ],

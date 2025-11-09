@@ -197,25 +197,25 @@ class _KitchenSessionCardState extends State<_KitchenSessionCard> {
   }
 
   Widget _buildActionButton(KitchenItem item, {bool isCompleted = false}) {
+    // 1. Item is DONE (Completed)
+    // Show a simple "Revert" button
     if (isCompleted) {
-      return PopupMenuButton<String>(
-        onSelected: (value) {
-          _updateItemStatus(item.orderId, item.menuItemId, value);
-        },
-        itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-          const PopupMenuItem<String>(
-            value: 'Pending',
-            child: Text('Remake Item'),
+      return GestureDetector(
+        onTap: () =>
+            _updateItemStatus(item.orderId, item.menuItemId, 'Pending'), // Revert straight to Pending
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.grey[600], // A neutral color for revert
+            borderRadius: BorderRadius.circular(8),
           ),
-          const PopupMenuItem<String>(
-            value: 'Making',
-            child: Text('Revert to Making'),
-          ),
-        ],
-        child: const Icon(Icons.check_circle, color: Colors.green),
+          child: const Text('Revert', style: TextStyle(color: Colors.white)),
+        ),
       );
     }
 
+    // 2. Item is NOT STARTED (Pending)
+    // Show the "Start" button
     if (item.status == 'Pending') {
       return GestureDetector(
         onTap: () =>
@@ -230,34 +230,13 @@ class _KitchenSessionCardState extends State<_KitchenSessionCard> {
         ),
       );
     }
-    if (item.status == 'Making') {
-      String completeActionText;
-      switch (item.orderType) {
-        case 'Takeaway':
-          completeActionText = 'Ready for Pickup';
-          break;
-        case 'Delivery':
-          completeActionText = 'Out for Delivery';
-          break;
-        default:
-          completeActionText = 'Send to Table';
-      }
 
-      return PopupMenuButton<String>(
-        onSelected: (value) {
-          _updateItemStatus(item.orderId, item.menuItemId, value);
-        },
-        itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-          PopupMenuItem<String>(
-            value: 'Completed',
-            child: Text(completeActionText),
-          ),
-          const PopupMenuDivider(),
-          const PopupMenuItem<String>(
-            value: 'Pending',
-            child: Text('Revert to Pending'),
-          ),
-        ],
+    // 3. Item is BEING MADE (Making)
+    // Show the "Done" button
+    if (item.status == 'Making') {
+      return GestureDetector(
+        onTap: () =>
+            _updateItemStatus(item.orderId, item.menuItemId, 'Completed'), // Go straight to Completed
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
@@ -268,6 +247,8 @@ class _KitchenSessionCardState extends State<_KitchenSessionCard> {
         ),
       );
     }
+
+    // Fallback for any other unknown status
     return const SizedBox.shrink();
   }
 
@@ -333,35 +314,46 @@ class _KitchenSessionCardState extends State<_KitchenSessionCard> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // --- NEW HEADER ---
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start, // Align text to the left
               children: [
-                Expanded(
-                  child: Text(
-                    sessionKey,
-                    style: theme.textTheme.titleLarge
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                // --- Row 1: Session Key (will wrap) ---
+                Text(
+                  sessionKey,
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                  // No overflow property, so it will wrap by default
                 ),
-                if (makingCount > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4.0),
-                    child: Chip(
-                      label: Text('Making: $makingCount'),
-                      backgroundColor: Colors.orange.withOpacity(0.2),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
-                if (pendingCount > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4.0),
-                    child: Chip(
-                      label: Text('Pending: $pendingCount'),
-                      backgroundColor: theme.colorScheme.error.withOpacity(0.2),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
+                const SizedBox(height: 8), // Vertical space between text and chips
+
+                // --- Row 2: Chips ---
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.start, // Align chips to the left
+                  children: [
+                    if (makingCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8.0), // Use right padding
+                        child: Chip(
+                          label: Text('Making: $makingCount'),
+                          labelStyle: theme.textTheme.bodySmall?.copyWith(fontSize: 10),
+                          padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                          backgroundColor: Colors.orange.withOpacity(0.2),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    if (pendingCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8.0), // Use right padding
+                        child: Chip(
+                          label: Text('Pending: $pendingCount'),
+                          labelStyle: theme.textTheme.bodySmall?.copyWith(fontSize: 10),
+                          padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                          backgroundColor: theme.colorScheme.error.withOpacity(0.2),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                  ],
+                ),
               ],
             ),
             // --- END NEW HEADER ---

@@ -1,3 +1,4 @@
+// lib/screen/restaurant/orders/assign_table_screen.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'dart:ui';
@@ -20,7 +21,7 @@ class OrderAssignment {
 
   String toDisplayString() {
     if (selections.isEmpty) {
-      return 'No tables or seats selected.'; 
+      return 'No tables or seats selected.';
     }
     final parts = <String>[];
     selections.forEach((tableId, seats) {
@@ -42,7 +43,13 @@ class OrderAssignment {
 
 class AssignTableScreen extends StatefulWidget {
   final String restaurantId;
-  const AssignTableScreen({super.key, required this.restaurantId});
+  final Map<String, Set<int>>? initialSelections;
+
+  const AssignTableScreen({
+    super.key,
+    required this.restaurantId,
+    this.initialSelections,
+  });
 
   @override
   State<AssignTableScreen> createState() => _AssignTableScreenState();
@@ -59,6 +66,9 @@ class _AssignTableScreenState extends State<AssignTableScreen> with SingleTicker
   @override
   void initState() {
     super.initState();
+    if (widget.initialSelections != null) {
+      _selections.addAll(widget.initialSelections!);
+    }
     _fetchFloorsAndInitializeController();
   }
 
@@ -90,29 +100,82 @@ class _AssignTableScreenState extends State<AssignTableScreen> with SingleTicker
     super.dispose();
   }
 
+  // --- THIS IS THE FIX ---
+  // Allows MULTI-TABLE selection by NOT clearing selections.
   void _updateSelection(String tableId, Set<int> seats) {
     setState(() {
-      if (seats.isEmpty) {
-        _selections.remove(tableId);
-      } else {
+      // Check if we are in "Update Mode" (shifting an order)
+      final bool isUpdateMode = widget.initialSelections != null;
+
+      if (isUpdateMode) {
+        // In update mode, any new selection REPLACES the old one.
+        _selections.clear();
+      }
+
+      if (seats.isNotEmpty) {
+        // Add the new selection
         _selections[tableId] = seats;
+      } else {
+        // If seats are empty, just remove this table (for multi-select mode)
+        _selections.remove(tableId);
       }
     });
   }
+  // -------------------------------------------
+
+  void _handleQuickShift(TableModel targetTable, Set<int> otherOccupiedSeats) {
+    // 1. Get total people in current selection
+    final int totalPeopleToMove = _selections.values.fold(0, (sum, seats) {
+      // Find the currently selected table to get its capacity if "All" is selected
+      if (seats.isEmpty) {
+        final tableId = _selections.keys.firstWhere((k) => _selections[k]!.isEmpty, orElse: () => '');
+        if(tableId.isNotEmpty) {
+          return sum + (_tableData[tableId]?.capacity ?? 0);
+        }
+        return sum;
+      }
+      return sum + seats.length;
+    });
+
+    if (totalPeopleToMove == 0) return; // No one to move
+
+    // 2. Get available seats on target table
+    final Set<int> allTargetSeats = targetTable.seats.map((s) => s.seatNumber).toSet();
+    final Set<int> availableTargetSeats = allTargetSeats.difference(otherOccupiedSeats);
+
+    // 3. Check capacity
+    if (availableTargetSeats.length < totalPeopleToMove) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Cannot shift $totalPeopleToMove people. ${targetTable.label} only has ${availableTargetSeats.length} available seats.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } else {
+      // 4. Perform the shift
+      setState(() {
+        _selections.clear(); // Clear all old selections (e.g., from T1)
+        _selections[targetTable.id] = availableTargetSeats.take(totalPeopleToMove).toSet();
+      });
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
+    final bool isLoading = _tabController == null || _floors.isEmpty;
+
     return Scaffold(
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
           const _StaticBackground(),
-          _tabController == null
+          isLoading
               ? const Center(child: CircularProgressIndicator())
               : Scaffold(
             backgroundColor: Colors.transparent,
             appBar: AppBar(
-              title: const Text('Assign to Table'),
+              title: Text(widget.initialSelections != null ? 'Update Table Assignment' : 'Assign to Table'),
               backgroundColor: Theme.of(context).scaffoldBackgroundColor.withOpacity(0.85),
               elevation: 0,
               bottom: TabBar(
@@ -132,11 +195,14 @@ class _AssignTableScreenState extends State<AssignTableScreen> with SingleTicker
                   onSelectionChanged: (entry) {
                     _updateSelection(entry.key, entry.value);
                   },
+                  onQuickShift: (table, occupied) => _handleQuickShift(table, occupied),
+                  isUpdateMode: widget.initialSelections != null,
+                  initialSelections: widget.initialSelections,
                 );
               }).toList(),
             ),
           ),
-          _buildConfirmationPanel(),
+          if (!isLoading) _buildConfirmationPanel(),
         ],
       ),
     );
@@ -194,7 +260,7 @@ class _AssignTableScreenState extends State<AssignTableScreen> with SingleTicker
                     Navigator.of(context).pop(result);
                   },
                   icon: const Icon(Icons.check),
-                  label: const Text('Confirm Assignment'),
+                  label: Text(widget.initialSelections != null ? 'Update Assignment' : 'Confirm Assignment'),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
@@ -214,6 +280,9 @@ class _FloorTableList extends StatefulWidget {
   final Map<String, Set<int>> selections;
   final ValueChanged<MapEntry<String, Set<int>>> onSelectionChanged;
   final Map<String, TableModel> tableDataCache;
+  final Function(TableModel, Set<int>) onQuickShift;
+  final bool isUpdateMode;
+  final Map<String, Set<int>>? initialSelections;
 
   const _FloorTableList({
     required this.restaurantId,
@@ -221,6 +290,9 @@ class _FloorTableList extends StatefulWidget {
     required this.selections,
     required this.onSelectionChanged,
     required this.tableDataCache,
+    required this.onQuickShift,
+    required this.isUpdateMode,
+    this.initialSelections,
   });
 
   @override
@@ -270,6 +342,10 @@ class _FloorTableListState extends State<_FloorTableList> with AutomaticKeepAliv
                   .snapshots(),
               builder: (context, orderSnapshot) {
                 final Set<int> occupiedSeats = {};
+
+                // Get the seats for the *original* session being updated
+                final currentSessionSeats = widget.initialSelections?[table.id] ?? {};
+
                 if (orderSnapshot.hasData) {
                   for (var doc in orderSnapshot.data!.docs) {
                     final data = doc.data() as Map<String, dynamic>;
@@ -285,13 +361,19 @@ class _FloorTableListState extends State<_FloorTableList> with AutomaticKeepAliv
                   }
                 }
 
+                // "otherOccupiedSeats" = All occupied seats MINUS the seats from my *original* session.
+                final otherOccupiedSeats = occupiedSeats.difference(currentSessionSeats);
+
                 return _TableSelectionCard(
                   table: table,
-                  occupiedSeats: occupiedSeats,
+                  occupiedSeats: otherOccupiedSeats,
+                  // Pass the *current* selections (from parent state) to show what's selected
                   initialSelection: widget.selections[table.id] ?? {},
                   onSelectionChanged: (newSelection) {
                     widget.onSelectionChanged(MapEntry(table.id, newSelection));
                   },
+                  isUpdateMode: widget.isUpdateMode,
+                  onQuickShift: () => widget.onQuickShift(table, otherOccupiedSeats),
                 );
               },
             );
@@ -307,13 +389,17 @@ class _TableSelectionCard extends StatefulWidget {
   final TableModel table;
   final Set<int> initialSelection;
   final ValueChanged<Set<int>> onSelectionChanged;
-  final Set<int> occupiedSeats;
+  final Set<int> occupiedSeats; // <-- This now correctly means seats occupied by OTHERS
+  final VoidCallback onQuickShift;
+  final bool isUpdateMode;
 
   const _TableSelectionCard({
     required this.table,
     required this.initialSelection,
     required this.onSelectionChanged,
     required this.occupiedSeats,
+    required this.onQuickShift,
+    required this.isUpdateMode,
   });
 
   @override
@@ -332,8 +418,10 @@ class _TableSelectionCardState extends State<_TableSelectionCard> {
   @override
   void didUpdateWidget(covariant _TableSelectionCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.initialSelection != oldWidget.initialSelection) {
-      _selectedSeats = widget.initialSelection;
+    if (widget.initialSelection != _selectedSeats) {
+      setState(() {
+        _selectedSeats = widget.initialSelection;
+      });
     }
   }
 
@@ -349,10 +437,8 @@ class _TableSelectionCardState extends State<_TableSelectionCard> {
   }
 
   void _toggleSelectAll(bool? value) {
-    final availableSeats = widget.table.seats
-        .map((s) => s.seatNumber)
-        .where((seatNum) => !widget.occupiedSeats.contains(seatNum))
-        .toSet();
+    final allSeatsOnTable = widget.table.seats.map((s) => s.seatNumber).toSet();
+    final availableSeats = allSeatsOnTable.difference(widget.occupiedSeats);
 
     setState(() {
       if (value == true) {
@@ -366,27 +452,47 @@ class _TableSelectionCardState extends State<_TableSelectionCard> {
 
   @override
   Widget build(BuildContext context) {
-    final availableSeats = widget.table.seats.where((s) => !widget.occupiedSeats.contains(s.seatNumber)).toList();
-    final isFullyOccupied = availableSeats.isEmpty && widget.table.seats.isNotEmpty;
+    final theme = Theme.of(context);
 
-    final isAllAvailableSelected = availableSeats.isNotEmpty && _selectedSeats.length == availableSeats.length && _selectedSeats.every((s) => availableSeats.any((av) => av.seatNumber == s));
+    final allSeatsOnTable = widget.table.seats.map((s) => s.seatNumber).toSet();
+    final allAvailableSeats = allSeatsOnTable.difference(widget.occupiedSeats);
+
+    final isFullyOccupiedByOthers = widget.table.seats.isNotEmpty &&
+        widget.occupiedSeats.length == allSeatsOnTable.length;
+
+    final bool isAllAvailableSelected = allAvailableSeats.isNotEmpty &&
+        _selectedSeats.length == allAvailableSeats.length &&
+        _selectedSeats.every((s) => allAvailableSeats.contains(s));
+
     final isIndeterminate = _selectedSeats.isNotEmpty && !isAllAvailableSelected;
+    final bool isThisTableSelectedByMe = _selectedSeats.isNotEmpty;
+
+    final bool canQuickShift = widget.isUpdateMode && !isFullyOccupiedByOthers && !isThisTableSelectedByMe;
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
-      color: isFullyOccupied ? Colors.grey.withOpacity(0.3) : null,
+      color: isThisTableSelectedByMe ? theme.primaryColor.withOpacity(0.1) : null,
       child: Column(
         children: [
           CheckboxListTile(
             title: Row(
               children: [
                 Text(widget.table.label,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontWeight: FontWeight.bold,
-                      color: isFullyOccupied ? Colors.grey.shade700 : null,
                     )),
                 const Spacer(),
-                if (isFullyOccupied)
+                if (canQuickShift)
+                  TextButton.icon(
+                    icon: const Icon(Icons.open_with, size: 18),
+                    label: const Text('Shift Here'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: theme.primaryColor,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: widget.onQuickShift,
+                  ),
+                if (isFullyOccupiedByOthers)
                   const Chip(
                     label: Text("Occupied"),
                     backgroundColor: Colors.red,
@@ -400,10 +506,9 @@ class _TableSelectionCardState extends State<_TableSelectionCard> {
                   )
               ],
             ),
-            value:
-            isIndeterminate ? null : isAllAvailableSelected,
+            value: isIndeterminate ? null : isAllAvailableSelected,
             tristate: true,
-            onChanged: isFullyOccupied ? null : _toggleSelectAll,
+            onChanged: isFullyOccupiedByOthers ? null : _toggleSelectAll,
             controlAffinity: ListTileControlAffinity.leading,
           ),
           Padding(
@@ -418,17 +523,33 @@ class _TableSelectionCardState extends State<_TableSelectionCard> {
               spacing: 8.0,
               runSpacing: 8.0,
               children: widget.table.seats.map((seat) {
-                final isSeatSelected =
-                _selectedSeats.contains(seat.seatNumber);
-                final isSeatOccupied = widget.occupiedSeats.contains(seat.seatNumber);
+                final isSelectedByMe = _selectedSeats.contains(seat.seatNumber);
+                final isOccupiedByOther = widget.occupiedSeats.contains(seat.seatNumber);
+
+                Color? chipColor;
+                Color? labelColor;
+                Color? borderColor = theme.dividerColor.withOpacity(0.5);
+
+                if (isOccupiedByOther) {
+                  chipColor = Colors.red.withOpacity(0.3);
+                  labelColor = theme.textTheme.bodyLarge?.color?.withOpacity(0.7);
+                  borderColor = Colors.red.withOpacity(0.1);
+                }
+
+                if (isSelectedByMe) {
+                  chipColor = theme.primaryColor;
+                  labelColor = theme.colorScheme.onPrimary;
+                  borderColor = theme.primaryColor;
+                }
 
                 return ChoiceChip(
                   label: Text('S${seat.seatNumber}'),
-                  selected: isSeatSelected,
-                  backgroundColor: isSeatOccupied ? Colors.red.shade200 : null,
-                  selectedColor: isSeatSelected ? Theme.of(context).primaryColor : (isSeatOccupied ? Colors.red.shade200 : null),
-                  labelStyle: TextStyle(color: isSeatOccupied ? Colors.white : null),
-                  onSelected: isSeatOccupied ? null : (selected) {
+                  selected: isSelectedByMe,
+                  backgroundColor: chipColor,
+                  selectedColor: chipColor,
+                  labelStyle: TextStyle(color: labelColor),
+                  side: BorderSide(color: borderColor ?? Colors.transparent),
+                  onSelected: isOccupiedByOther ? null : (selected) {
                     _toggleSeat(seat.seatNumber);
                   },
                 );

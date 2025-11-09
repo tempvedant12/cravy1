@@ -338,6 +338,8 @@ pw.Widget _buildStandardTemplate(
     pw.Context context, Map<String, dynamic> billData, pw.Font font, double baseFontSize) {
   final formatter =
   NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
+  final DateTime billDate = billData['billedAt'] as DateTime? ?? DateTime.now();
+
   return pw.Column(
     crossAxisAlignment: pw.CrossAxisAlignment.start,
     children: [
@@ -360,8 +362,8 @@ pw.Widget _buildStandardTemplate(
       pw.SizedBox(height: 4),
       _buildSummaryRow('Bill No.', billData['billNumber'], font, fontSize: baseFontSize),
       _buildSummaryRow('Session', billData['sessionKey'], font, fontSize: baseFontSize),
-      _buildSummaryRow(
-          'Date', DateFormat('dd/MM/yy hh:mm a').format(DateTime.now()), font, fontSize: baseFontSize),
+  _buildSummaryRow(
+  'Date', DateFormat('dd/MM/yy hh:mm a').format(billDate), font, fontSize: baseFontSize),
       pw.Divider(height: 8, borderStyle: pw.BorderStyle.dashed, thickness: 0.5),
       pw.Table.fromTextArray(
         border: null,
@@ -437,6 +439,7 @@ pw.Widget _buildCompactTemplate(
   final formatter =
   NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
   final compactFontSize = baseFontSize - 1;
+  final DateTime billDate = billData['billedAt'] as DateTime? ?? DateTime.now();
   return pw.Column(
     crossAxisAlignment: pw.CrossAxisAlignment.start,
     children: [
@@ -458,7 +461,7 @@ pw.Widget _buildCompactTemplate(
       pw.Divider(height: 1, borderStyle: pw.BorderStyle.dashed),
       pw.SizedBox(height: 2),
       _buildSummaryRow('Bill: ${billData['billNumber']}',
-          DateFormat('dd/MM/yy hh:mm a').format(DateTime.now()), font,
+          DateFormat('dd/MM/yy hh:mm a').format(billDate), font,
           fontSize: compactFontSize),
       pw.Divider(height: 4, borderStyle: pw.BorderStyle.dashed, thickness: 0.5),
       pw.Table.fromTextArray(
@@ -527,6 +530,7 @@ pw.Widget _buildMinimalistTemplate(
     pw.Context context, Map<String, dynamic> billData, pw.Font font, double baseFontSize) {
   final formatter =
   NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
+  final DateTime billDate = billData['billedAt'] as DateTime? ?? DateTime.now();
   return pw.Column(
     crossAxisAlignment: pw.CrossAxisAlignment.start,
     children: [
@@ -549,7 +553,7 @@ pw.Widget _buildMinimalistTemplate(
       _buildSummaryRow('Bill No.', billData['billNumber'], font, fontSize: baseFontSize),
       _buildSummaryRow('Session', billData['sessionKey'], font, fontSize: baseFontSize),
       _buildSummaryRow(
-          'Date', DateFormat('dd/MM/yy hh:mm a').format(DateTime.now()), font, fontSize: baseFontSize),
+          'Date', DateFormat('dd/MM/yy hh:mm a').format(billDate), font, fontSize: baseFontSize),
       pw.SizedBox(height: 8),
       pw.Table.fromTextArray(
         border: null,

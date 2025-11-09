@@ -138,6 +138,286 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen>
     super.dispose();
   }
 
+  // --- NEW: Handler for Editing Restaurant Payment Time ---
+  Future<void> _editRestaurantPayment(
+      String sessionKey, Timestamp billedAt, DateTime newDateTime) async {
+    try {
+      final query = await FirebaseFirestore.instance
+          .collection('restaurants')
+          .doc(widget.restaurantId)
+          .collection('orders')
+          .where('sessionKey', isEqualTo: sessionKey)
+          .where('billingDetails.billedAt', isEqualTo: billedAt)
+          .get();
+
+      if (query.docs.isEmpty) {
+        throw Exception('No matching orders found for this bill.');
+      }
+
+      final batch = FirebaseFirestore.instance.batch();
+      for (final doc in query.docs) {
+        // We must read the existing billingDetails map and only update the 'billedAt' field
+        final data = doc.data() as Map<String, dynamic>;
+        final billingDetails =
+            data['billingDetails'] as Map<String, dynamic>? ?? {};
+
+        // Update the timestamp
+        billingDetails['billedAt'] = Timestamp.fromDate(newDateTime);
+
+        // Write the modified map back
+        batch.update(doc.reference, {'billingDetails': billingDetails});
+      }
+      await batch.commit();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Restaurant payment date updated.'),
+              backgroundColor: Colors.green),
+        );
+      }
+      setState(() {}); // Refresh view
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  // --- NEW: Handler for "Deleting" (Marking as Unpaid) Restaurant Payment ---
+  Future<void> _deleteRestaurantPayment(String sessionKey, Timestamp billedAt) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Confirm Revert Payment'),
+        content: const Text(
+            'Are you sure you want to revert this payment? This will mark all orders in this bill as "Unpaid" and move them back to Active Orders. It will NOT delete the orders.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text('Revert Payment',
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        final query = await FirebaseFirestore.instance
+            .collection('restaurants')
+            .doc(widget.restaurantId)
+            .collection('orders')
+            .where('sessionKey', isEqualTo: sessionKey)
+            .where('billingDetails.billedAt', isEqualTo: billedAt)
+            .get();
+
+        if (query.docs.isEmpty) {
+          throw Exception('No matching orders found for this bill.');
+        }
+
+        final batch = FirebaseFirestore.instance.batch();
+        for (final doc in query.docs) {
+          batch.update(doc.reference, {
+            'isPaid': false,
+            'billingDetails': FieldValue.delete(),
+          });
+        }
+        await batch.commit();
+
+        setState(() {
+          _selectedSessionKey = null;
+          _selectedSessionOrders = null;
+          _selectedTransactionType = null;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Payment reverted. Orders are now active and unpaid.'),
+                backgroundColor: Colors.green),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error reverting: ${e.toString()}')),
+          );
+        }
+      }
+    }
+  }
+
+  // --- NEW: Handler for Editing Supplier Payment Time ---
+  Future<void> _editSupplierPayment(String purchaseOrderId, DateTime newDateTime) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('restaurants')
+          .doc(widget.restaurantId)
+          .collection('purchaseOrders')
+          .doc(purchaseOrderId)
+          .update({'orderDate': Timestamp.fromDate(newDateTime)});
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Supplier payment date updated.'),
+              backgroundColor: Colors.green),
+        );
+      }
+      setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  // --- NEW: Handler for Deleting Supplier Payment ---
+  Future<void> _deleteSupplierPayment(String purchaseOrderId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Confirm Delete'),
+        content: const Text(
+            'Are you sure you want to delete this purchase order? This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text('Delete',
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('restaurants')
+            .doc(widget.restaurantId)
+            .collection('purchaseOrders')
+            .doc(purchaseOrderId)
+            .delete();
+
+        setState(() {
+          _selectedSessionKey = null;
+          _selectedTransactionType = null;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Supplier payment deleted.'),
+                backgroundColor: Colors.green),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error deleting: ${e.toString()}')),
+          );
+        }
+      }
+    }
+  }
+
+  // --- EXISTING STAFF HANDLERS (Unchanged) ---
+  Future<void> _editStaffPayment(String staffId, String paymentId, DateTime newDateTime) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('restaurants')
+          .doc(widget.restaurantId)
+          .collection('staff')
+          .doc(staffId)
+          .collection('payments')
+          .doc(paymentId)
+          .update({'paidAt': Timestamp.fromDate(newDateTime)});
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Payment date updated.'),
+              backgroundColor: Colors.green),
+        );
+      }
+      // Refresh the FutureBuilder by triggering a rebuild
+      setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteStaffPayment(String staffId, String paymentId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Confirm Delete'),
+        content: const Text(
+            'Are you sure you want to delete this payment? This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text('Delete',
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('restaurants')
+            .doc(widget.restaurantId)
+            .collection('staff')
+            .doc(staffId)
+            .collection('payments')
+            .doc(paymentId)
+            .delete();
+
+        // Deselect the item to close the panel
+        setState(() {
+          _selectedSessionKey = null;
+          _selectedStaffId = null;
+          _selectedTransactionType = null;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Payment deleted.'),
+                backgroundColor: Colors.green),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error deleting: ${e.toString()}')),
+          );
+        }
+      }
+    }
+  }
+
+
   // --- MODIFIED: Handle new transaction types and staff ID ---
   void _updateSelectedSession(
       String key,
@@ -203,6 +483,13 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen>
                       selectedPaymentMethod: _selectedPaymentMethod,
                       allMenuItems: _allMenuItems,
                       onSelectSession: _updateSelectedSession,
+                      // --- PASS ALL HANDLERS ---
+                      onDeleteRestaurantPayment: _deleteRestaurantPayment,
+                      onEditRestaurantPayment: _editRestaurantPayment,
+                      onDeleteSupplierPayment: _deleteSupplierPayment,
+                      onEditSupplierPayment: _editSupplierPayment,
+                      onDeletePayment: _deleteStaffPayment,
+                      onEditPayment: _editStaffPayment,
                     ),
                     _RestaurantPaymentsView(
                       restaurantId: widget.restaurantId,
@@ -210,12 +497,18 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen>
                       selectedPaymentMethod: _selectedPaymentMethod,
                       allMenuItems: _allMenuItems,
                       onSelectSession: _updateSelectedSession,
+                      // --- PASS RESTAURANT HANDLERS ---
+                      onDeleteRestaurantPayment: _deleteRestaurantPayment,
+                      onEditRestaurantPayment: _editRestaurantPayment,
                     ),
                     _SupplierPaymentsView(
                       restaurantId: widget.restaurantId,
                       selectedDateRange: _selectedDateRange,
                       selectedPaymentMethod: _selectedPaymentMethod,
                       onSelectSession: _updateSelectedSession,
+                      // --- PASS SUPPLIER HANDLERS ---
+                      onDeleteSupplierPayment: _deleteSupplierPayment,
+                      onEditSupplierPayment: _editSupplierPayment,
                     ),
                     // --- NEW TAB VIEW ---
                     _StaffPaymentsView(
@@ -223,6 +516,9 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen>
                       selectedDateRange: _selectedDateRange,
                       selectedPaymentMethod: _selectedPaymentMethod,
                       onSelectSession: _updateSelectedSession,
+                      // --- PASS STAFF HANDLERS ---
+                      onDeletePayment: _deleteStaffPayment,
+                      onEditPayment: _editStaffPayment,
                     ),
                     // ---------------------
                   ],
@@ -260,13 +556,28 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen>
     }
 
     if (_selectedTransactionType == 'restaurant') {
-      // Restaurant bill selected
+      // --- FIND THE UNIQUE BILLEDAT TIMESTAMP ---
+      final billingDetails = (_selectedSessionOrders!.first.data()
+      as Map<String, dynamic>)['billingDetails']
+      as Map<String, dynamic>? ??
+          {};
+      final billedAt = (billingDetails['billedAt'] as Timestamp?);
+
+      if (billedAt == null) {
+        return const Center(child: Text('Error: Bill timestamp not found.'));
+      }
+
       return _BillPreviewPanel(
         key: ValueKey(_selectedSessionKey),
         restaurantId: widget.restaurantId,
         sessionKey: _selectedSessionKey!,
         sessionOrders: _selectedSessionOrders!,
         allMenuItems: _allMenuItems,
+        // --- PASS HANDLERS ---
+        onDelete: () => _deleteRestaurantPayment(_selectedSessionKey!, billedAt),
+        onEdit: (newDate) =>
+            _editRestaurantPayment(_selectedSessionKey!, billedAt, newDate),
+        billedAt: billedAt.toDate(), // Pass the date for the edit dialog
       );
     } else if (_selectedTransactionType == 'supplier') {
       // Supplier Payment Selected
@@ -288,20 +599,28 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen>
           final po = PurchaseOrder.fromFirestore(snapshot.data!);
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
-            child: _SupplierOrderPreview(po: po),
+            child: _SupplierOrderPreview(
+              po: po,
+              // --- PASS HANDLERS ---
+              onDelete: () => _deleteSupplierPayment(po.id),
+              onEdit: (newDate) => _editSupplierPayment(po.id, newDate),
+            ),
           );
         },
       );
     } else if (_selectedTransactionType == 'staff') {
       // Staff Payment Selected
+      final String paymentId = _selectedSessionKey!; // <-- Get the ID
+      final String staffId = _selectedStaffId!;   // <-- Get the ID
+
       return FutureBuilder<DocumentSnapshot>(
         future: FirebaseFirestore.instance
             .collection('restaurants')
             .doc(widget.restaurantId)
             .collection('staff')
-            .doc(_selectedStaffId) // Use the stored staffId
+            .doc(staffId) // Use the stored staffId
             .collection('payments')
-            .doc(_selectedSessionKey) // Use the paymentId
+            .doc(paymentId) // Use the paymentId
             .get(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -309,19 +628,19 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen>
           }
           if (!snapshot.hasData || !snapshot.data!.exists) {
             return Center(
-                child: Text('Staff Payment #$_selectedSessionKey not found.'));
+                child: Text('Staff Payment #$paymentId not found.'));
           }
-          // We need the staff name, which isn't on the payment doc.
-          // We can fetch it, or just show "Staff Payment".
-          // Let's create the model which requires re-fetching staff (or passing it)
-          // To simplify, we'll just pass the data to a new preview widget
+
           final paymentData = snapshot.data!.data() as Map<String, dynamic>;
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: _StaffPaymentPreview(
               paymentData: paymentData,
-              staffId: _selectedStaffId!,
+              staffId: staffId,
               restaurantId: widget.restaurantId,
+              paymentId: paymentId, // <-- PASS THE ID
+              onDelete: () => _deleteStaffPayment(staffId, paymentId), // <-- PASS DELETE CALLBACK
+              onEdit: (DateTime newDate) => _editStaffPayment(staffId, paymentId, newDate), // <-- PASS EDIT CALLBACK
             ),
           );
         },
@@ -366,6 +685,14 @@ class _AllTransactionsView extends StatelessWidget {
   final List<MenuItem> allMenuItems;
   final Function(String, List<DocumentSnapshot>?, String, {String? staffId})
   onSelectSession;
+  // --- ADD ALL HANDLERS ---
+  final Function(String, Timestamp, DateTime) onEditRestaurantPayment;
+  final Function(String, Timestamp) onDeleteRestaurantPayment;
+  final Function(String, DateTime) onEditSupplierPayment;
+  final Function(String) onDeleteSupplierPayment;
+  final Function(String, String) onDeletePayment; // Staff
+  final Function(String, String, DateTime) onEditPayment; // Staff
+  // -----------------------
 
   const _AllTransactionsView({
     required this.restaurantId,
@@ -373,6 +700,14 @@ class _AllTransactionsView extends StatelessWidget {
     this.selectedPaymentMethod,
     required this.allMenuItems,
     required this.onSelectSession,
+    // --- ADD ALL HANDLERS ---
+    required this.onEditRestaurantPayment,
+    required this.onDeleteRestaurantPayment,
+    required this.onEditSupplierPayment,
+    required this.onDeleteSupplierPayment,
+    required this.onDeletePayment,
+    required this.onEditPayment,
+    // -----------------------
   });
 
   Future<List<Map<String, dynamic>>> _fetchCombinedTransactions() async {
@@ -398,20 +733,29 @@ class _AllTransactionsView extends StatelessWidget {
     final ordersSnapshot = await ordersQuery.get();
     final groupedSessions = <String, List<DocumentSnapshot>>{};
     for (final doc in ordersSnapshot.docs) {
-      final sessionKey =
-          (doc.data() as Map<String, dynamic>)['sessionKey'] as String? ??
-              'Unknown';
-      groupedSessions.putIfAbsent(sessionKey, () => []).add(doc);
+      final data = doc.data() as Map<String, dynamic>;
+      final sessionKey = data['sessionKey'] as String? ?? 'Unknown';
+
+      // --- FIX: Create a compound key ---
+      final billingDetails = data['billingDetails'] as Map<String, dynamic>? ?? {};
+      // Use the timestamp's millisecond value as a unique ID, or the doc.id as a fallback
+      final billedAt = (billingDetails['billedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? doc.id;
+      final compoundKey = '$sessionKey-$billedAt';
+      // ----------------------------------
+
+      groupedSessions.putIfAbsent(compoundKey, () => []).add(doc);
     }
     final List<Map<String, dynamic>> restaurantTransactions = [];
-    groupedSessions.forEach((key, orders) {
+    groupedSessions.forEach((compoundKey, orders) { // Renamed 'key' to 'compoundKey'
       final finalOrder = orders.first.data() as Map<String, dynamic>;
       final billingDetails =
           finalOrder['billingDetails'] as Map<String, dynamic>? ?? {};
       final orderType = finalOrder['orderType'] as String? ?? 'Dine-In';
+      final sessionKey = finalOrder['sessionKey'] as String? ?? 'Unknown'; // <-- ADD this line
+
       restaurantTransactions.add({
         'type': 'restaurant',
-        'key': key,
+        'key': sessionKey, // <-- FIX: Pass the original sessionKey here
         'date': (billingDetails['billedAt'] as Timestamp?)?.toDate() ??
             DateTime.fromMillisecondsSinceEpoch(0),
         'amount': billingDetails['finalTotal'] ?? 0.0,
@@ -533,8 +877,16 @@ class _AllTransactionsView extends StatelessWidget {
                       onSelectSession(transaction['key'], sessionOrders,
                           'restaurant'); // <-- Pass type
                       if (!isWide) {
+                        // --- PASS HANDLERS TO SHEET ---
+                        final billingDetails = (sessionOrders.first.data() as Map<String, dynamic>)['billingDetails'] as Map<String, dynamic>? ?? {};
+                        final billedAt = (billingDetails['billedAt'] as Timestamp?);
                         _showBillPreviewSheet(
-                            context, transaction['key'], sessionOrders);
+                          context, transaction['key'], sessionOrders,
+                          // --- PASS HANDLERS ---
+                          billedAt: billedAt,
+                          onDelete: billedAt == null ? null : () => onDeleteRestaurantPayment(transaction['key'], billedAt),
+                          onEdit: billedAt == null ? null : (newDate) => onEditRestaurantPayment(transaction['key'], billedAt, newDate),
+                        );
                       }
                     },
                   );
@@ -546,7 +898,13 @@ class _AllTransactionsView extends StatelessWidget {
                       onSelectSession(
                           po.id, null, 'supplier'); // <-- Pass type
                       if (!isWide) {
-                        _showSupplierPreviewSheet(context, po);
+                        // --- PASS HANDLERS TO SHEET ---
+                        _showSupplierPreviewSheet(
+                          context,
+                          po,
+                          onDelete: () => onDeleteSupplierPayment(po.id),
+                          onEdit: (newDate) => onEditSupplierPayment(po.id, newDate),
+                        );
                       }
                     },
                   );
@@ -560,8 +918,14 @@ class _AllTransactionsView extends StatelessWidget {
                       onSelectSession(payment.id, null, 'staff',
                           staffId: payment.staffId); // <-- Pass type and staffId
                       if (!isWide) {
+                        // --- PASS HANDLERS TO SHEET ---
                         _showStaffPreviewSheet(
-                            context, payment.staffId, payment.id);
+                          context,
+                          payment.staffId,
+                          payment.id,
+                          onDelete: () => onDeletePayment(payment.staffId, payment.id),
+                          onEdit: (newDate) => onEditPayment(payment.staffId, payment.id, newDate),
+                        );
                       }
                     },
                   );
@@ -575,8 +939,13 @@ class _AllTransactionsView extends StatelessWidget {
     );
   }
 
+  // --- MODIFIED: Accept and pass handlers ---
   void _showBillPreviewSheet(BuildContext context, String sessionKey,
-      List<DocumentSnapshot> sessionOrders) {
+      List<DocumentSnapshot> sessionOrders, {
+        Timestamp? billedAt,
+        VoidCallback? onDelete,
+        Function(DateTime)? onEdit,
+      }) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -595,6 +964,10 @@ class _AllTransactionsView extends StatelessWidget {
               sessionKey: sessionKey,
               sessionOrders: sessionOrders,
               allMenuItems: allMenuItems,
+              // --- PASS HANDLERS ---
+              billedAt: billedAt?.toDate(),
+              onDelete: onDelete ?? () {}, // Provide dummy if null
+              onEdit: onEdit ?? (newDate) {}, // Provide dummy if null
             );
           },
         );
@@ -602,7 +975,11 @@ class _AllTransactionsView extends StatelessWidget {
     );
   }
 
-  void _showSupplierPreviewSheet(BuildContext context, PurchaseOrder po) {
+  // --- MODIFIED: Accept and pass handlers ---
+  void _showSupplierPreviewSheet(BuildContext context, PurchaseOrder po, {
+    required VoidCallback onDelete,
+    required Function(DateTime) onEdit,
+  }) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -618,7 +995,12 @@ class _AllTransactionsView extends StatelessWidget {
           builder: (BuildContext context, ScrollController scrollController) {
             return SingleChildScrollView(
               controller: scrollController,
-              child: _SupplierOrderPreview(po: po),
+              child: _SupplierOrderPreview(
+                po: po,
+                // --- PASS HANDLERS ---
+                onDelete: onDelete,
+                onEdit: onEdit,
+              ),
             );
           },
         );
@@ -626,9 +1008,12 @@ class _AllTransactionsView extends StatelessWidget {
     );
   }
 
-  // --- NEW: Show Staff Payment Sheet ---
+  // --- MODIFIED: Accept and pass handlers ---
   void _showStaffPreviewSheet(
-      BuildContext context, String staffId, String paymentId) {
+      BuildContext context, String staffId, String paymentId, {
+        required VoidCallback onDelete,
+        required Function(DateTime) onEdit,
+      }) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -666,6 +1051,9 @@ class _AllTransactionsView extends StatelessWidget {
                     paymentData: paymentData,
                     staffId: staffId,
                     restaurantId: restaurantId,
+                    paymentId: paymentId,
+                    onDelete: onDelete, // <-- PASS IT
+                    onEdit: onEdit,     // <-- PASS IT
                   ),
                 );
               },
@@ -685,7 +1073,10 @@ class _RestaurantPaymentsView extends StatefulWidget {
   final String? selectedPaymentMethod;
   final List<MenuItem> allMenuItems;
   final Function(String, List<DocumentSnapshot>?, String, {String? staffId})
-  onSelectSession; // <-- MODIFIED SIGNATURE
+  onSelectSession;
+  // --- ADD HANDLERS ---
+  final Function(String, Timestamp, DateTime) onEditRestaurantPayment;
+  final Function(String, Timestamp) onDeleteRestaurantPayment;
 
   const _RestaurantPaymentsView({
     required this.restaurantId,
@@ -693,6 +1084,9 @@ class _RestaurantPaymentsView extends StatefulWidget {
     this.selectedPaymentMethod,
     required this.allMenuItems,
     required this.onSelectSession,
+    // --- ADD HANDLERS ---
+    required this.onEditRestaurantPayment,
+    required this.onDeleteRestaurantPayment,
   });
 
   @override
@@ -706,7 +1100,6 @@ class _RestaurantPaymentsViewState extends State<_RestaurantPaymentsView>
 
   @override
   Widget build(BuildContext context) {
-    // (Same as before)
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('restaurants')
@@ -750,7 +1143,6 @@ class _RestaurantPaymentsViewState extends State<_RestaurantPaymentsView>
   }
 
   Widget _buildHistoryGrid({String? floorName}) {
-    // (Query logic is same as before)
     Query query = FirebaseFirestore.instance
         .collection('restaurants')
         .doc(widget.restaurantId)
@@ -789,7 +1181,10 @@ class _RestaurantPaymentsViewState extends State<_RestaurantPaymentsView>
           final data = order.data() as Map<String, dynamic>;
           final sessionKey = data['sessionKey'] as String? ?? 'Unknown';
           if (floorName == null || sessionKey.contains(floorName)) {
-            groupedSessions.putIfAbsent(sessionKey, () => []).add(order);
+            final billingDetails = data['billingDetails'] as Map<String, dynamic>? ?? {};
+            final billedAt = (billingDetails['billedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? order.id;
+            final compoundKey = '$sessionKey-$billedAt';
+            groupedSessions.putIfAbsent(compoundKey, () => []).add(order);
           }
         }
 
@@ -812,23 +1207,38 @@ class _RestaurantPaymentsViewState extends State<_RestaurantPaymentsView>
             ),
             itemCount: sessionKeys.length,
             itemBuilder: (context, index) {
-              final key = sessionKeys[index];
-              final sessionOrders = groupedSessions[key]!;
+              final compoundKey = sessionKeys[index];
+              final sessionOrders = groupedSessions[compoundKey]!;
               final finalOrder =
               sessionOrders.first.data() as Map<String, dynamic>;
+
+              final originalSessionKey = finalOrder['sessionKey'] as String? ?? 'Unknown';
               final orderType =
                   finalOrder['orderType'] as String? ?? 'Dine-In';
+
+              // --- GET BILLEDAT ---
+              final billingDetails = (finalOrder['billingDetails'] as Map<String, dynamic>? ?? {});
+              final billedAt = (billingDetails['billedAt'] as Timestamp?);
+
               return _TransactionGridCard(
                 restaurantId: widget.restaurantId,
-                sessionKey: key,
+                sessionKey: originalSessionKey,
                 sessionOrders: sessionOrders,
                 allMenuItems: widget.allMenuItems,
                 orderType: orderType,
                 onTap: () {
-                  widget.onSelectSession(key, sessionOrders,
-                      'restaurant'); // <-- Pass type
+                  widget.onSelectSession(originalSessionKey, sessionOrders,
+                      'restaurant');
                   if (!isWide) {
-                    _showBillPreviewSheet(context, key, sessionOrders);
+                    // --- PASS HANDLERS TO SHEET ---
+                    _showBillPreviewSheet(
+                      context,
+                      originalSessionKey,
+                      sessionOrders,
+                      billedAt: billedAt,
+                      onDelete: billedAt == null ? null : () => widget.onDeleteRestaurantPayment(originalSessionKey, billedAt),
+                      onEdit: billedAt == null ? null : (newDate) => widget.onEditRestaurantPayment(originalSessionKey, billedAt, newDate),
+                    );
                   }
                 },
               );
@@ -839,8 +1249,13 @@ class _RestaurantPaymentsViewState extends State<_RestaurantPaymentsView>
     );
   }
 
+  // --- MODIFIED: Accept and pass handlers ---
   void _showBillPreviewSheet(BuildContext context, String sessionKey,
-      List<DocumentSnapshot> sessionOrders) {
+      List<DocumentSnapshot> sessionOrders, {
+        Timestamp? billedAt,
+        VoidCallback? onDelete,
+        Function(DateTime)? onEdit,
+      }) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -859,6 +1274,10 @@ class _RestaurantPaymentsViewState extends State<_RestaurantPaymentsView>
               sessionKey: sessionKey,
               sessionOrders: sessionOrders,
               allMenuItems: widget.allMenuItems,
+              // --- PASS HANDLERS ---
+              billedAt: billedAt?.toDate(),
+              onDelete: onDelete ?? () {}, // Provide dummy if null
+              onEdit: onEdit ?? (newDate) {}, // Provide dummy if null
             );
           },
         );
@@ -874,18 +1293,24 @@ class _SupplierPaymentsView extends StatelessWidget {
   final DateTimeRange? selectedDateRange;
   final String? selectedPaymentMethod;
   final Function(String, List<DocumentSnapshot>?, String, {String? staffId})
-  onSelectSession; // <-- MODIFIED SIGNATURE
+  onSelectSession;
+  // --- ADD HANDLERS ---
+  final Function(String, DateTime) onEditSupplierPayment;
+  final Function(String) onDeleteSupplierPayment;
+
 
   const _SupplierPaymentsView({
     required this.restaurantId,
     this.selectedDateRange,
     this.selectedPaymentMethod,
     required this.onSelectSession,
+    // --- ADD HANDLERS ---
+    required this.onEditSupplierPayment,
+    required this.onDeleteSupplierPayment,
   });
 
   @override
   Widget build(BuildContext context) {
-    // (Query logic is same as before)
     Query query = FirebaseFirestore.instance
         .collection('restaurants')
         .doc(restaurantId)
@@ -937,11 +1362,15 @@ class _SupplierPaymentsView extends StatelessWidget {
               return _SupplierTransactionGridCard(
                 purchaseOrder: po,
                 onTap: () {
-                  // --- FIX: Accessing property on stateless widget ---
-                  onSelectSession(po.id, null, 'supplier'); // <-- Pass type
-                  // ----------------------------------------------------
+                  onSelectSession(po.id, null, 'supplier');
                   if (!isWide) {
-                    _showSupplierPreviewSheet(context, po);
+                    // --- PASS HANDLERS TO SHEET ---
+                    _showSupplierPreviewSheet(
+                      context,
+                      po,
+                      onDelete: () => onDeleteSupplierPayment(po.id),
+                      onEdit: (newDate) => onEditSupplierPayment(po.id, newDate),
+                    );
                   }
                 },
               );
@@ -952,7 +1381,11 @@ class _SupplierPaymentsView extends StatelessWidget {
     );
   }
 
-  void _showSupplierPreviewSheet(BuildContext context, PurchaseOrder po) {
+  // --- MODIFIED: Accept and pass handlers ---
+  void _showSupplierPreviewSheet(BuildContext context, PurchaseOrder po, {
+    required VoidCallback onDelete,
+    required Function(DateTime) onEdit,
+  }) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -968,7 +1401,12 @@ class _SupplierPaymentsView extends StatelessWidget {
           builder: (BuildContext context, ScrollController scrollController) {
             return SingleChildScrollView(
               controller: scrollController,
-              child: _SupplierOrderPreview(po: po),
+              child: _SupplierOrderPreview(
+                po: po,
+                // --- PASS HANDLERS ---
+                onDelete: onDelete,
+                onEdit: onEdit,
+              ),
             );
           },
         );
@@ -986,11 +1424,16 @@ class _StaffPaymentsView extends StatelessWidget {
   final Function(String, List<DocumentSnapshot>?, String, {String? staffId})
   onSelectSession;
 
+  final Function(String, String) onDeletePayment; // <-- ADD THIS
+  final Function(String, String, DateTime) onEditPayment; // <-- ADD THIS
+
   const _StaffPaymentsView({
     required this.restaurantId,
     this.selectedDateRange,
     this.selectedPaymentMethod,
     required this.onSelectSession,
+    required this.onDeletePayment, // <-- ADD THIS
+    required this.onEditPayment,   // <-- ADD THIS
   });
 
   Future<List<StaffPaymentModel>> _fetchPayments() async {
@@ -1043,7 +1486,13 @@ class _StaffPaymentsView extends StatelessWidget {
                   onSelectSession(payment.id, null, 'staff',
                       staffId: payment.staffId);
                   if (!isWide) {
-                    _showStaffPreviewSheet(context, payment.staffId, payment.id);
+                    _showStaffPreviewSheet(
+                      context,
+                      payment.staffId,
+                      payment.id,
+                      onDelete: () => onDeletePayment(payment.staffId, payment.id),
+                      onEdit: (newDate) => onEditPayment(payment.staffId, payment.id, newDate),
+                    );
                   }
                 },
               );
@@ -1054,8 +1503,12 @@ class _StaffPaymentsView extends StatelessWidget {
     });
   }
 
+  // --- MODIFIED: Accept and pass handlers ---
   void _showStaffPreviewSheet(
-      BuildContext context, String staffId, String paymentId) {
+      BuildContext context, String staffId, String paymentId, {
+        required VoidCallback onDelete,
+        required Function(DateTime) onEdit,
+      }) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1093,6 +1546,9 @@ class _StaffPaymentsView extends StatelessWidget {
                     paymentData: paymentData,
                     staffId: staffId,
                     restaurantId: restaurantId,
+                    paymentId: paymentId,
+                    onDelete: onDelete, // <-- PASS IT
+                    onEdit: onEdit,     // <-- PASS IT
                   ),
                 );
               },
@@ -1106,7 +1562,7 @@ class _StaffPaymentsView extends StatelessWidget {
 // ------------------------------------
 
 // --- NEW WIDGETS FOR SUPPLIER PO DISPLAY ---
-// (This widget is unchanged)
+
 class _SupplierTransactionGridCard extends StatefulWidget {
   final PurchaseOrder purchaseOrder;
   final VoidCallback onTap;
@@ -1123,146 +1579,59 @@ class _SupplierTransactionGridCard extends StatefulWidget {
 
 class _SupplierTransactionGridCardState
     extends State<_SupplierTransactionGridCard> {
-  bool _isHovered = false;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final po = widget.purchaseOrder;
     final formatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: AnimatedScale(
-        scale: _isHovered ? 1.05 : 1.0,
-        duration: const Duration(milliseconds: 200),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: _isHovered
-                      ? theme.primaryColor.withOpacity(0.5)
-                      : theme.dividerColor.withOpacity(0.2),
-                  width: 1.5,
-                ),
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.lightBlue
-                        .withOpacity(0.1), // Distinct color for supplier
-                    Colors.lightBlue.withOpacity(0.05),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: widget.onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
+                  Icon(Icons.local_shipping_outlined,
+                      color: theme.primaryColor),
+                  const SizedBox(width: 8),
+                  Expanded(
                     child: Text(
                       po.supplierName,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold, color: Colors.lightBlue),
+                      style: theme.textTheme.titleLarge,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'PO #${po.id.substring(0, 6).toUpperCase()}',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  const Divider(height: 16),
-                  Expanded(
-                    child: ListView(
-                      children: [
-                        ...po.items.map((item) {
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 2.0),
-                            child: Row(
-                              children: [
-                                Text('${item.quantity} ${item.unit} x',
-                                    style: theme.textTheme.bodySmall),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                    child: Text(item.name,
-                                        style: theme.textTheme.bodySmall)),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            DateFormat.yMMMd().format(po.orderDate),
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          Text(
-                            'Ordered',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          formatter.format(po.totalAmount),
-                          style: theme.textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Icon(Icons.payment,
-                                size: 18,
-                                color: theme.textTheme.bodyMedium?.color),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Paid with ${po.paymentMethod}',
-                                style: theme.textTheme.bodySmall,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Chip(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        visualDensity: VisualDensity.compact,
-                        label: Text(po.status),
-                        backgroundColor: po.status == 'Completed'
-                            ? Colors.green.withOpacity(0.2)
-                            : Colors.orange.withOpacity(0.2),
-                      ),
-                    ],
                   ),
                 ],
               ),
-            ),
+              Text('PO #${po.id.substring(0, 6).toUpperCase()}'),
+              const Spacer(),
+              const Divider(),
+              _buildRow('Paid:', formatter.format(po.totalAmount)),
+              _buildRow('Method:', po.paymentMethod),
+              _buildRow('Time:', DateFormat.yMd().add_jm().format(po.orderDate)),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.bodySmall),
+          Text(value, style: Theme.of(context).textTheme.bodyLarge),
+        ],
       ),
     );
   }
@@ -1270,8 +1639,49 @@ class _SupplierTransactionGridCardState
 
 class _SupplierOrderPreview extends StatelessWidget {
   final PurchaseOrder po;
+  // --- ADD HANDLERS ---
+  final VoidCallback onDelete;
+  final Function(DateTime) onEdit;
 
-  const _SupplierOrderPreview({required this.po});
+  const _SupplierOrderPreview({
+    required this.po,
+    required this.onDelete,
+    required this.onEdit,
+  });
+
+  // --- NEW: Edit Function ---
+  Future<void> _showEditDialog(BuildContext context) async {
+    final currentPaidAt = po.orderDate;
+
+    final DateTime? newDate = await showDatePicker(
+      context: context,
+      initialDate: currentPaidAt,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+
+    if (newDate == null) return;
+    if (!context.mounted) return;
+
+    final TimeOfDay? newTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(currentPaidAt),
+    );
+
+    if (newTime == null) return;
+
+    final newDateTime = DateTime(
+      newDate.year,
+      newDate.month,
+      newDate.day,
+      newTime.hour,
+      newTime.minute,
+    );
+
+    onEdit(newDateTime);
+  }
+  // --------------------------
+
 
   @override
   Widget build(BuildContext context) {
@@ -1290,7 +1700,7 @@ class _SupplierOrderPreview extends StatelessWidget {
           _buildDetailRow(
               theme, 'PO Number:', po.id.substring(0, 6).toUpperCase()),
           _buildDetailRow(
-              theme, 'Order Date:', DateFormat.yMMMd().format(po.orderDate)),
+              theme, 'Order Date:', DateFormat.yMMMd().add_jm().format(po.orderDate)),
           _buildDetailRow(
               theme, 'Total Amount:', formatter.format(po.totalAmount)),
           _buildDetailRow(
@@ -1312,6 +1722,25 @@ class _SupplierOrderPreview extends StatelessWidget {
             dense: true,
           ))
               .toList(),
+          // --- NEW: Add Edit/Delete buttons ---
+          const Divider(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton.icon(
+                icon: Icon(Icons.edit_calendar_outlined, size: 20, color: theme.colorScheme.primary),
+                label: Text('Edit Date/Time', style: TextStyle(color: theme.colorScheme.primary)),
+                onPressed: () => _showEditDialog(context),
+              ),
+              const SizedBox(width: 16),
+              TextButton.icon(
+                icon: Icon(Icons.delete_outline, size: 20, color: theme.colorScheme.error),
+                label: Text('Delete', style: TextStyle(color: theme.colorScheme.error)),
+                onPressed: onDelete,
+              ),
+            ],
+          ),
+          // ------------------------------------
         ],
       ),
     );
@@ -1349,132 +1778,65 @@ class _StaffPaymentGridCard extends StatefulWidget {
 }
 
 class _StaffPaymentGridCardState extends State<_StaffPaymentGridCard> {
-  bool _isHovered = false;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final payment = widget.payment;
     final formatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: AnimatedScale(
-        scale: _isHovered ? 1.05 : 1.0,
-        duration: const Duration(milliseconds: 200),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: _isHovered
-                      ? theme.primaryColor.withOpacity(0.5)
-                      : theme.dividerColor.withOpacity(0.2),
-                  width: 1.5,
-                ),
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.green.withOpacity(0.1), // Distinct color for staff
-                    Colors.green.withOpacity(0.05),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: widget.onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
+                  Icon(Icons.person_outline, color: theme.primaryColor),
+                  const SizedBox(width: 8),
+                  Expanded(
                     child: Text(
                       payment.staffName,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold, color: Colors.green),
+                      style: theme.textTheme.titleLarge,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Payment ID: #${payment.id.substring(0, 6).toUpperCase()}',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  const Divider(height: 16),
-                  Expanded(
-                    child: ListView(
-                      children: [
-                        Text(
-                          'Notes: ${payment.notes.isEmpty ? 'N/A' : payment.notes}',
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            DateFormat.yMMMd().format(payment.paidAt),
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          Text(
-                            DateFormat.jm().format(payment.paidAt),
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          formatter.format(payment.amount),
-                          style: theme.textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Icon(Icons.payment,
-                                size: 18,
-                                color: theme.textTheme.bodyMedium?.color),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Type: ${payment.paymentType}',
-                                style: theme.textTheme.bodySmall,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Chip(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        visualDensity: VisualDensity.compact,
-                        label: const Text('Paid'),
-                        backgroundColor: Colors.green.withOpacity(0.2),
-                      ),
-                    ],
                   ),
                 ],
               ),
-            ),
+              Text('Payment ID: ${payment.id.substring(0, 6).toUpperCase()}'),
+              const Spacer(),
+              const Divider(),
+              _buildRow('Paid:', formatter.format(payment.amount)),
+              _buildRow('Notes:', payment.notes.isEmpty ? 'N/A' : payment.notes),
+              _buildRow('Time:', DateFormat.yMd().add_jm().format(payment.paidAt)),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.bodySmall),
+          Flexible(
+            child: Text(
+              value,
+              style: Theme.of(context).textTheme.bodyLarge,
+              textAlign: TextAlign.right,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1485,23 +1847,60 @@ class _StaffPaymentPreview extends StatelessWidget {
   final Map<String, dynamic> paymentData;
   final String staffId;
   final String restaurantId;
+  final String paymentId;
+  final VoidCallback onDelete;
+  final Function(DateTime) onEdit;
 
   const _StaffPaymentPreview({
     required this.paymentData,
     required this.staffId,
     required this.restaurantId,
+    required this.paymentId,
+    required this.onDelete,
+    required this.onEdit,
   });
+
+  Future<void> _showEditDialog(BuildContext context) async {
+    final currentPaidAt =
+        (paymentData['paidAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+
+    final DateTime? newDate = await showDatePicker(
+      context: context,
+      initialDate: currentPaidAt,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+
+    if (newDate == null) return;
+    if (!context.mounted) return;
+
+    final TimeOfDay? newTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(currentPaidAt),
+    );
+
+    if (newTime == null) return;
+
+    final newDateTime = DateTime(
+      newDate.year,
+      newDate.month,
+      newDate.day,
+      newTime.hour,
+      newTime.minute,
+    );
+
+    onEdit(newDateTime);
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final formatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
-
     final amount = (paymentData['amount'] as num?)?.toDouble() ?? 0.0;
     final paidAt = (paymentData['paidAt'] as Timestamp?)?.toDate();
     final notes = paymentData['notes'] as String? ?? '';
-    final paymentType = paymentData['paymentType'] as String? ?? 'N/A';
     final payRate = (paymentData['payRate'] as num?)?.toDouble() ?? 0.0;
+    final paymentType = paymentData['paymentType'] as String? ?? 'N/A';
 
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -1510,34 +1909,39 @@ class _StaffPaymentPreview extends StatelessWidget {
         children: [
           Text('Staff Payment Details', style: theme.textTheme.headlineSmall),
           const Divider(height: 24),
-          // Fetch staff name for context
-          FutureBuilder<DocumentSnapshot>(
-            future: FirebaseFirestore.instance
-                .collection('restaurants')
-                .doc(restaurantId)
-                .collection('staff')
-                .doc(staffId)
-                .get(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) return const SizedBox.shrink();
-              final staffName =
-                  (snapshot.data!.data() as Map<String, dynamic>)['name'] ??
-                      'Unknown Staff';
-              return _buildDetailRow(theme, 'Staff Member:', staffName);
-            },
-          ),
+          _buildDetailRow(theme, 'Amount:', formatter.format(amount)),
           _buildDetailRow(
               theme,
-              'Payment Date:',
+              'Date:',
               paidAt != null
                   ? DateFormat.yMMMd().add_jm().format(paidAt)
                   : 'N/A'),
-          _buildDetailRow(theme, 'Amount Paid:', formatter.format(amount)),
-          _buildDetailRow(theme, 'Payment Type:', paymentType),
-          _buildDetailRow(
-              theme, 'Pay Rate at Time:', formatter.format(payRate)),
           _buildDetailRow(theme, 'Notes:', notes.isEmpty ? 'N/A' : notes),
+          _buildDetailRow(
+              theme, 'Payment Type:', paymentType.isEmpty ? 'N/A' : paymentType),
+          _buildDetailRow(theme, 'Pay Rate at Time:',
+              '${formatter.format(payRate)} / ${paymentType.toLowerCase()}'),
           const Divider(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton.icon(
+                icon: Icon(Icons.edit_calendar_outlined,
+                    size: 20, color: theme.colorScheme.primary),
+                label: Text('Edit Date/Time',
+                    style: TextStyle(color: theme.colorScheme.primary)),
+                onPressed: () => _showEditDialog(context),
+              ),
+              const SizedBox(width: 16),
+              TextButton.icon(
+                icon: Icon(Icons.delete_outline,
+                    size: 20, color: theme.colorScheme.error),
+                label: Text('Delete',
+                    style: TextStyle(color: theme.colorScheme.error)),
+                onPressed: onDelete,
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1549,11 +1953,9 @@ class _StaffPaymentPreview extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label, style: theme.textTheme.bodyLarge),
-          const SizedBox(width: 16),
-          Expanded(
+          Flexible(
             child: Text(
               value,
               style: theme.textTheme.titleMedium?.copyWith(color: color),
@@ -1569,7 +1971,6 @@ class _StaffPaymentPreview extends StatelessWidget {
 
 class _FilterDialog extends StatefulWidget {
   final DateTimeRange? initialDateRange;
-
   final String? initialPaymentMethod;
 
   const _FilterDialog({this.initialDateRange, this.initialPaymentMethod});
@@ -1580,25 +1981,20 @@ class _FilterDialog extends StatefulWidget {
 
 class _FilterDialogState extends State<_FilterDialog> {
   DateTimeRange? _dateRange;
-
   String? _paymentMethod;
-
-  // --- MODIFIED: Added Pay Later ---
   final List<String> _paymentMethods = [
+    'All',
     'Cash',
     'Card',
     'UPI',
     'Other',
     'Pay Later'
   ];
-  // ---------------------------------
 
   @override
   void initState() {
     super.initState();
-
     _dateRange = widget.initialDateRange;
-
     _paymentMethod = widget.initialPaymentMethod;
   }
 
@@ -1609,8 +2005,7 @@ class _FilterDialogState extends State<_FilterDialog> {
       lastDate: DateTime.now(),
       initialDateRange: _dateRange,
     );
-
-    if (picked != null && picked != _dateRange) {
+    if (picked != null) {
       setState(() {
         _dateRange = picked;
       });
@@ -1625,51 +2020,40 @@ class _FilterDialogState extends State<_FilterDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            leading: const Icon(Icons.date_range),
             title: const Text('Date Range'),
             subtitle: Text(_dateRange == null
-                ? 'Any'
-                : '${DateFormat.yMMMd().format(_dateRange!.start)} - ${DateFormat.yMMMd().format(_dateRange!.end)}'),
+                ? 'Any Time'
+                : '${DateFormat.yMd().format(_dateRange!.start)} - ${DateFormat.yMd().format(_dateRange!.end)}'),
+            trailing: const Icon(Icons.calendar_today),
             onTap: _selectDateRange,
-            trailing: _dateRange != null
-                ? IconButton(
-                icon: const Icon(Icons.clear),
-                onPressed: () => setState(() => _dateRange = null))
-                : null,
           ),
           DropdownButtonFormField<String>(
             value: _paymentMethod,
-            decoration: const InputDecoration(
-              labelText: 'Payment Method',
-              prefixIcon: Icon(Icons.payment),
-            ),
-            items: _paymentMethods.map((String value) {
-              return DropdownMenuItem<String>(
-                value: value,
-                child: Text(value),
-              );
-            }).toList(),
-            onChanged: (String? newValue) {
+            decoration: const InputDecoration(labelText: 'Payment Method'),
+            hint: const Text('All Methods'),
+            items: _paymentMethods
+                .map((method) =>
+                DropdownMenuItem(value: method, child: Text(method)))
+                .toList(),
+            onChanged: (value) {
               setState(() {
-                _paymentMethod = newValue;
+                _paymentMethod = (value == 'All' ? null : value);
               });
             },
           ),
         ],
       ),
       actions: [
-        if (_paymentMethod != null || _dateRange != null)
-          TextButton(
-            onPressed: () => setState(() {
-              _paymentMethod = null;
-
-              _dateRange = null;
-            }),
-            child: const Text('Clear Filters'),
-          ),
         TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+          onPressed: () {
+            // Clear filters
+            Navigator.of(context).pop({
+              'dateRange': null,
+              'paymentMethod': null,
+            });
+          },
+          child: const Text('Clear Filters'),
+        ),
         ElevatedButton(
           onPressed: () {
             Navigator.of(context).pop({
@@ -1689,234 +2073,116 @@ class _TransactionGridCard extends StatefulWidget {
   final String sessionKey;
   final List<DocumentSnapshot> sessionOrders;
   final List<MenuItem> allMenuItems;
+  final String orderType;
   final VoidCallback onTap;
-  final String orderType; // <-- ADDED: Receive orderType
 
-  const _TransactionGridCard(
-      {required this.sessionKey,
-        required this.sessionOrders,
-        required this.onTap,
-        required this.restaurantId,
-        required this.allMenuItems,
-        required this.orderType, // <-- ADDED: Receive orderType
-      });
+  const _TransactionGridCard({
+    required this.restaurantId,
+    required this.sessionKey,
+    required this.sessionOrders,
+    required this.allMenuItems,
+    required this.orderType,
+    required this.onTap,
+  });
 
   @override
   State<_TransactionGridCard> createState() => _TransactionGridCardState();
 }
 
 class _TransactionGridCardState extends State<_TransactionGridCard> {
-  bool _isHovered = false;
+  // This state is just to show a simple aggregation. More complex logic can be added.
+  double _totalAmount = 0.0;
+  DateTime? _billedAt;
+  String _paymentMethod = 'N/A';
+  String _billNumber = '...';
 
-  Map<String, OrderItem> _aggregateOrders(List<DocumentSnapshot> orders) {
-    final aggregatedItems = <String, OrderItem>{};
+  @override
+  void initState() {
+    super.initState();
+    _aggregateData();
+  }
 
-    for (var orderDoc in orders) {
-      final orderData = orderDoc.data() as Map<String, dynamic>;
+  void _aggregateData() {
+    if (widget.sessionOrders.isEmpty) return;
 
-      final items = List<Map<String, dynamic>>.from(orderData['items'] ?? []);
+    final firstOrderData =
+    widget.sessionOrders.first.data() as Map<String, dynamic>;
+    final billingDetails =
+        firstOrderData['billingDetails'] as Map<String, dynamic>? ?? {};
 
-      for (var itemMap in items) {
-        final item = OrderItem.fromMap(itemMap, widget.allMenuItems);
-
-        if (aggregatedItems.containsKey(item.uniqueId)) {
-          aggregatedItems[item.uniqueId]!.quantity += item.quantity;
-        } else {
-          aggregatedItems[item.uniqueId] = item;
-        }
-      }
-    }
-
-    return aggregatedItems;
+    _totalAmount = (billingDetails['finalTotal'] as num?)?.toDouble() ?? 0.0;
+    _billedAt = (billingDetails['billedAt'] as Timestamp?)?.toDate();
+    _paymentMethod = billingDetails['paymentMethod'] as String? ?? 'N/A';
+    _billNumber = billingDetails['billNumber'] as String? ?? '...';
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    final finalTransaction =
-    widget.sessionOrders.first.data() as Map<String, dynamic>;
-
-    final billingDetails =
-        finalTransaction['billingDetails'] as Map<String, dynamic>? ?? {};
-
-    final billedAt = (billingDetails['billedAt'] as Timestamp?)?.toDate();
-
     final formatter = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
 
-    final total = billingDetails['finalTotal'] ?? 0.0;
+    IconData icon;
+    switch (widget.orderType) {
+      case 'Takeaway':
+        icon = Icons.takeout_dining_outlined;
+        break;
+      case 'Delivery':
+        icon = Icons.delivery_dining_outlined;
+        break;
+      default:
+        icon = Icons.restaurant_outlined;
+    }
 
-    final paymentMethod = billingDetails['paymentMethod'] ?? 'N/A';
-
-    // --- FIX: Use billNumber from billingDetails if available ---
-    final billNumber = billingDetails['billNumber']?.toString() ??
-        widget.sessionOrders.first.id.substring(0, 8).toUpperCase();
-    // -----------------------------------------------------------
-
-    final aggregatedItems = _aggregateOrders(widget.sessionOrders);
-
-    final totalItems =
-    aggregatedItems.values.fold(0, (sum, item) => sum + item.quantity);
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: AnimatedScale(
-        scale: _isHovered ? 1.05 : 1.0,
-        duration: const Duration(milliseconds: 200),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: _isHovered
-                      ? theme.primaryColor.withOpacity(0.5)
-                      : theme.dividerColor.withOpacity(0.2),
-                  width: 1.5,
-                ),
-                gradient: LinearGradient(
-                  colors: [
-                    theme.colorScheme.surface.withOpacity(0.5),
-                    theme.colorScheme.surface.withOpacity(0.2),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: widget.onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          widget.sessionKey,
-                          style: theme.textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Chip(
-                        label: Text(widget.orderType),
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        labelStyle: theme.textTheme.bodySmall,
-                        backgroundColor: theme.primaryColor.withOpacity(0.1),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Bill #$billNumber',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  const Divider(height: 16),
+                  Icon(icon, color: theme.primaryColor),
+                  const SizedBox(width: 8),
                   Expanded(
-                    child: ListView(
-                      children: [
-                        ...aggregatedItems.values.map((item) {
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 2.0),
-                            child: Row(
-                              children: [
-                                Text('${item.quantity}x',
-                                    style: theme.textTheme.bodySmall),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                    child: Text(item.menuItem.name,
-                                        style: theme.textTheme.bodySmall)),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                      ],
+                    child: Text(
+                      widget.sessionKey,
+                      style: theme.textTheme.titleLarge,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (billedAt != null)
-                              Text(
-                                DateFormat.yMMMd().format(billedAt),
-                                style: theme.textTheme.bodySmall,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            if (billedAt != null)
-                              Text(
-                                DateFormat.jm().format(billedAt),
-                                style: theme.textTheme.bodySmall,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          formatter.format(total),
-                          style: theme.textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Icon(Icons.payment,
-                                size: 16,
-                                color: theme.textTheme.bodySmall?.color),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Paid with $paymentMethod',
-                                style: theme.textTheme.bodySmall,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Icon(Icons.shopping_cart_checkout,
-                                size: 16,
-                                color: theme.textTheme.bodySmall?.color),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '$totalItems Items',
-                                style: theme.textTheme.bodySmall,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
                   ),
                 ],
               ),
-            ),
+              Text('Bill #${_billNumber.padLeft(4, '0')}'),
+              const Spacer(),
+              const Divider(),
+              _buildRow('Paid:', formatter.format(_totalAmount)),
+              _buildRow('Method:', _paymentMethod),
+              _buildRow(
+                  'Time:',
+                  _billedAt != null
+                      ? DateFormat.yMd().add_jm().format(_billedAt!)
+                      : 'N/A'),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.bodySmall),
+          Text(value, style: Theme.of(context).textTheme.bodyLarge),
+        ],
       ),
     );
   }
@@ -1924,13 +2190,10 @@ class _TransactionGridCardState extends State<_TransactionGridCard> {
 
 class _StaticBackground extends StatelessWidget {
   const _StaticBackground();
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     final isDark = theme.brightness == Brightness.dark;
-
     return Container(
       color: theme.scaffoldBackgroundColor,
       child: Stack(
@@ -1970,6 +2233,10 @@ class _BillPreviewPanel extends StatefulWidget {
   final String sessionKey;
   final List<DocumentSnapshot> sessionOrders;
   final List<MenuItem> allMenuItems;
+  // --- ADD HANDLERS ---
+  final VoidCallback onDelete;
+  final Function(DateTime) onEdit;
+  final DateTime? billedAt; // To know the current date
 
   const _BillPreviewPanel({
     super.key, // Use super.key
@@ -1977,6 +2244,10 @@ class _BillPreviewPanel extends StatefulWidget {
     required this.sessionKey,
     required this.sessionOrders,
     required this.allMenuItems,
+    // --- ADD HANDLERS ---
+    required this.onDelete,
+    required this.onEdit,
+    required this.billedAt,
   });
 
   @override
@@ -1999,8 +2270,43 @@ class _BillPreviewPanelState extends State<_BillPreviewPanel> {
     );
   }
 
+  // --- NEW: Edit Function ---
+  Future<void> _showEditDialog(BuildContext context) async {
+    final currentPaidAt = widget.billedAt ?? DateTime.now();
+
+    final DateTime? newDate = await showDatePicker(
+      context: context,
+      initialDate: currentPaidAt,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+
+    if (newDate == null) return;
+    if (!context.mounted) return;
+
+    final TimeOfDay? newTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(currentPaidAt),
+    );
+
+    if (newTime == null) return;
+
+    final newDateTime = DateTime(
+      newDate.year,
+      newDate.month,
+      newDate.day,
+      newTime.hour,
+      newTime.minute,
+    );
+
+    widget.onEdit(newDateTime);
+  }
+  // --------------------------
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context); // Get theme
+
     return FutureBuilder<Map<String, dynamic>>(
       future: _billDetailsFuture,
       builder: (context, snapshot) {
@@ -2064,20 +2370,54 @@ class _BillPreviewPanelState extends State<_BillPreviewPanel> {
             Container(
               padding: const EdgeInsets.all(16.0),
               width: double.infinity,
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.print_outlined),
-                label: const Text('Print Again'),
-                onPressed: () {
-                  // Use the public function from bill_template_screen.dart
-                  showPrintedBill(
-                    context: context,
-                    restaurantId: widget.restaurantId,
-                    sessionKey: widget.sessionKey,
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
+              decoration: BoxDecoration(
+                  color: theme.scaffoldBackgroundColor,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 8,
+                      offset: const Offset(0, -4),
+                    )
+                  ]
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.print_outlined),
+                    label: const Text('Print Again'),
+                    onPressed: () {
+                      // Use the public function from bill_template_screen.dart
+                      showPrintedBill(
+                        context: context,
+                        restaurantId: widget.restaurantId,
+                        sessionKey: widget.sessionKey,
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      minimumSize: const Size(double.infinity, 50), // Ensure it's full-width
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // --- NEW: Edit and Delete Buttons ---
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      TextButton.icon(
+                        icon: Icon(Icons.edit_calendar_outlined, size: 20, color: theme.colorScheme.primary),
+                        label: Text('Edit Date/Time', style: TextStyle(color: theme.colorScheme.primary)),
+                        onPressed: () => _showEditDialog(context),
+                      ),
+                      TextButton.icon(
+                        icon: Icon(Icons.undo_outlined, size: 20, color: theme.colorScheme.error),
+                        label: Text('Revert Payment', style: TextStyle(color: theme.colorScheme.error)),
+                        onPressed: widget.onDelete,
+                      ),
+                    ],
+                  ),
+                  // ------------------------------------
+                ],
               ),
             )
           ],
@@ -2131,6 +2471,10 @@ Future<Map<String, dynamic>> _historyFetchAndPrepareBillData(
 
   final aggregatedItems =
   _historyAggregateOrders(orderDocs, allMenuItems).values.toList();
+
+  final billedAtTimestamp = (billingDetails['billedAt'] as Timestamp?);
+  final DateTime billedAtDate = billedAtTimestamp?.toDate() ?? DateTime.now(); // Get the date
+
   final subtotal =
   aggregatedItems.fold(0.0, (sum, item) => sum + item.totalPrice);
   final discountPercentage = (billingDetails['discount'] ?? 0.0).toDouble();
@@ -2180,6 +2524,7 @@ Future<Map<String, dynamic>> _historyFetchAndPrepareBillData(
         .map((c) => CustomerInfo.fromMap(c as Map<String, dynamic>))
         .toList(),
     'orderType': firstOrderData['orderType'] ?? 'Dine-In',
+    'billedAt': billedAtDate,
   };
 }
 

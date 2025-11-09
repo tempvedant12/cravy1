@@ -12,6 +12,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:intl/intl.dart';
 
+import '../../../services/table_service.dart';
+
 
 
 class Reservation {
@@ -646,38 +648,8 @@ class _SessionSubCard extends StatelessWidget {
   }
 
   Future<void> _shiftTable(BuildContext context) async {
-    final newTable = await showDialog<TableModel>(
-      context: context,
-      builder: (_) => _SelectTableDialog(restaurantId: restaurantId, currentTableId: table.id),
-    );
-
-    if (newTable != null && context.mounted) {
-      final batch = FirebaseFirestore.instance.batch();
-
-      
-      for (var orderDoc in sessionOrders) {
-        batch.update(orderDoc.reference, {
-          'tableIds': [newTable.id],
-          'assignment': {newTable.id: (orderDoc.data() as Map<String, dynamic>)['assignment'][table.id]},
-          'assignmentLabel': newTable.label,
-          'sessionKey': newTable.label,
-        });
-      }
-
-      
-      batch.update(
-        FirebaseFirestore.instance.collection('restaurants').doc(restaurantId).collection('tables').doc(table.id),
-        {'activeSessionKey': FieldValue.delete()},
-      );
-      batch.update(
-        FirebaseFirestore.instance.collection('restaurants').doc(restaurantId).collection('tables').doc(newTable.id),
-        {'activeSessionKey': newTable.label},
-      );
-
-      await batch.commit();
-
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Shifted from ${table.label} to ${newTable.label}')));
-    }
+    // The 'restaurantId' and 'sessionOrders' are already available in this widget's scope
+    await shiftTableSession(context, restaurantId, sessionOrders);
   }
 }
 
@@ -776,10 +748,12 @@ class _StaticBackground extends StatelessWidget {
 
 Future<void> updateTableSessionStatus(String restaurantId,
     Map<String, Set<int>> assignments, String sessionKey,
-    {required bool closeSession}) async {
+    {required bool closeSession,String? oldSessionKey}) async {
   final batch = FirebaseFirestore.instance.batch();
   final restaurantRef =
   FirebaseFirestore.instance.collection('restaurants').doc(restaurantId);
+
+  final keyToFind = closeSession ? (oldSessionKey ?? sessionKey) : sessionKey;
 
   for (final tableId in assignments.keys) {
     final tableRef = restaurantRef.collection('tables').doc(tableId);
@@ -788,6 +762,11 @@ Future<void> updateTableSessionStatus(String restaurantId,
     
     final snapshot = await tableRef.get();
     if (!snapshot.exists) continue;
+
+    final tableData = snapshot.data()! as Map<String, dynamic>;
+    if (closeSession && tableData['activeSessionKey'] != keyToFind) {
+      continue;
+    }
 
     final currentTable = TableModel.fromFirestore(snapshot);
     final newSeats = List<Seat>.from(currentTable.seats);

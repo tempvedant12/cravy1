@@ -28,8 +28,11 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
   late double _payRate;
   late String _paymentType;
   late TextEditingController _payRateController;
+  late int _salaryPayday; // <-- ADD THIS
+  late TextEditingController _paydayController; // <-- ADD THIS
 
-  final List<String> _paymentTypes = ['Salary', 'Hourly', 'N/A'];
+  // --- *** MODIFICATION 1: Added 'Daily' *** ---
+  final List<String> _paymentTypes = ['Salary', 'Hourly', 'Daily', 'N/A'];
   // ------------------
 
   @override
@@ -46,12 +49,16 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
         : widget.staff!.paymentType;
     _payRateController =
         TextEditingController(text: _payRate == 0 ? '' : _payRate.toString());
+    _salaryPayday = widget.staff?.salaryPayday ?? 1; // <-- ADD THIS
+    _paydayController = TextEditingController(
+        text: _salaryPayday.toString()); // <-- ADD THIS
     // ------------------
   }
 
   @override
   void dispose() {
     _payRateController.dispose();
+    _paydayController.dispose(); // <-- ADD THIS
     super.dispose();
   }
 
@@ -67,6 +74,7 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
         'email': _email,
         'payRate': _payRate,
         'paymentType': _paymentType,
+        'salaryPayday': _paymentType == 'Salary' ? _salaryPayday : 1, // <-- ADD THIS
       };
       try {
         if (widget.staff == null) {
@@ -237,12 +245,43 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
                           FilteringTextInputFormatter.allow(
                               RegExp(r'^\d+\.?\d{0,2}')),
                         ],
-                        // Dynamic suffix text
+                        // --- *** MODIFICATION 2: Updated suffix logic *** ---
                         suffixText: _paymentType == 'N/A'
                             ? ''
-                            : '/ ${_paymentType.toLowerCase() == 'salary' ? 'month' : 'hour'}',
+                            : '/ ${_paymentType.toLowerCase() == 'salary' ? 'month' : (_paymentType.toLowerCase() == 'daily' ? 'day' : 'hour')}',
                         onSaved: (value) =>
                         _payRate = double.tryParse(value ?? '0.0') ?? 0.0,
+                      ),
+                      AnimatedSize(
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeInOut,
+                        child: _paymentType == 'Salary'
+                            ? Padding(
+                          padding: const EdgeInsets.only(top: 20.0),
+                          child: _buildGlassTextField(
+                            controller: _paydayController,
+                            label: 'Salary Payday (e.g., 1-31)',
+                            icon: Icons.calendar_today_outlined,
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                              LengthLimitingTextInputFormatter(2),
+                            ],
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return 'Please enter a day';
+                              }
+                              final day = int.tryParse(value);
+                              if (day == null || day < 1 || day > 31) {
+                                return 'Enter a valid day (1-31)';
+                              }
+                              return null;
+                            },
+                            onSaved: (value) =>
+                            _salaryPayday = int.tryParse(value ?? '1') ?? 1,
+                          ),
+                        )
+                            : const SizedBox.shrink(),
                       ),
                       const SizedBox(height: 40),
                       _isLoading

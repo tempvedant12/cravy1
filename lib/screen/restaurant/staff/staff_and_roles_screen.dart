@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:intl/intl.dart';
 import 'add_edit_staff_screen.dart';
+import 'staff_payment_dialogs.dart'; // <-- IMPORT THE NEW DIALOGS
 
 // --- UPDATED Staff Model ---
 class Staff {
@@ -15,6 +16,7 @@ class Staff {
   final String email;
   final double payRate;
   final String paymentType;
+  final int salaryPayday; // <-- ADD THIS
 
   Staff({
     required this.id,
@@ -24,6 +26,7 @@ class Staff {
     required this.email,
     required this.payRate,
     required this.paymentType,
+    required this.salaryPayday, // <-- ADD THIS
   });
 
   factory Staff.fromFirestore(DocumentSnapshot doc) {
@@ -36,6 +39,7 @@ class Staff {
       email: data['email'] ?? '',
       payRate: (data['payRate'] as num?)?.toDouble() ?? 0.0,
       paymentType: data['paymentType'] ?? '',
+      salaryPayday: (data['salaryPayday'] as num?)?.toInt() ?? 1, // <-- ADD THIS
     );
   }
 }
@@ -237,6 +241,8 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
                               verticalOffset: 50.0,
                               child: FadeInAnimation(
                                 child: _StaffAttendanceCard(
+                                  // --- PASS restaurantId ---
+                                  restaurantId: widget.restaurantId,
                                   item: item,
                                   onTap: () {
                                     Navigator.of(context).push(MaterialPageRoute(
@@ -282,16 +288,18 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
 
 // --- NEW: REDESIGNED STAFF CARD ---
 class _StaffAttendanceCard extends StatefulWidget {
+  final String restaurantId; // <-- ADDED
   final StaffWithAttendance item;
   final VoidCallback onTap;
   final ValueChanged<bool> onToggle;
-  final VoidCallback onDelete; // --- ADDED DELETE CALLBACK ---
+  final VoidCallback onDelete;
 
   const _StaffAttendanceCard(
-      {required this.item,
+      {required this.restaurantId, // <-- ADDED
+        required this.item,
         required this.onTap,
         required this.onToggle,
-        required this.onDelete}); // --- ADDED DELETE CALLBACK ---
+        required this.onDelete});
 
   @override
   State<_StaffAttendanceCard> createState() => _StaffAttendanceCardState();
@@ -299,6 +307,22 @@ class _StaffAttendanceCard extends StatefulWidget {
 
 class _StaffAttendanceCardState extends State<_StaffAttendanceCard> {
   bool _isHovered = false;
+  late Stream<QuerySnapshot> _paymentStream; // <-- ADDED
+
+  @override
+  void initState() {
+    super.initState();
+    // --- ADDED: Stream for last payment ---
+    _paymentStream = FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('staff')
+        .doc(widget.item.staff.id)
+        .collection('payments')
+        .orderBy('paidAt', descending: true)
+        .limit(1)
+        .snapshots();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -348,25 +372,75 @@ class _StaffAttendanceCardState extends State<_StaffAttendanceCard> {
                 ),
                 title: Text(widget.item.staff.name,
                     style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text(widget.item.staff.role),
+                // --- MODIFIED SUBTITLE ---
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(widget.item.staff.role),
+                    const SizedBox(height: 4),
+                    StreamBuilder<QuerySnapshot>(
+                      stream: _paymentStream,
+                      builder: (context, snapshot) {
+                        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                          return const SizedBox.shrink();
+                        }
+                        final payment = StaffPayment.fromFirestore(
+                            snapshot.data!.docs.first);
+
+                        String paidTill = '';
+                        if (payment.paymentType == 'Salary' && payment.payPeriodStart != null) {
+                          paidTill = 'Paid till ${DateFormat.yMMMM().format(payment.payPeriodStart!)}';
+                        } else if (payment.payPeriodEnd != null) {
+                          paidTill = 'Paid till ${DateFormat.yMd().format(payment.payPeriodEnd!)}';
+                        } else {
+                          paidTill = 'Last paid ${DateFormat.yMd().format(payment.paidAt)}';
+                        }
+
+                        // --- FIX 2: Wrap the Text in a Flexible widget ---
+                        return Row(
+                          children: [
+                            Icon(Icons.attach_money,
+                                color: Colors.green, size: 16),
+                            const SizedBox(width: 4),
+                            Flexible( // <-- WRAP HERE
+                              child: Text(
+                                paidTill,
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(color: Colors.green),
+                                overflow: TextOverflow.visible, // Allow wrap
+                              ),
+                            ),
+                          ],
+                        );
+                        // --- END FIX 2 ---
+                      },
+                    ),
+                  ],
+                ),
+                // --- END MODIFIED SUBTITLE ---
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      widget.item.isPresent ? 'Present' : 'Absent',
-                      style: TextStyle(
-                          color: widget.item.isPresent
-                              ? Colors.green
-                              : Colors.red,
-                          fontWeight: FontWeight.bold),
+                    // --- "QUICK PAY" BUTTON ---
+                    IconButton(
+                      icon: Icon(Icons.payments_outlined,
+                          color: theme.primaryColor),
+                      onPressed: () {
+                        showStaffPaymentDialog(
+                          context,
+                          widget.item.staff,
+                          widget.restaurantId,
+                        );
+                      },
+                      tooltip: 'Log Payment',
                     ),
-                    const SizedBox(width: 8),
+
+                    // --- FIX 1: REMOVED "Present/Absent" Text AND SizedBox ---
                     Switch(
                       value: widget.item.isPresent,
                       onChanged: widget.onToggle,
                       activeColor: Colors.green,
                     ),
-                    // --- ADDED DELETE BUTTON ---
                     IconButton(
                       icon: Icon(Icons.delete_outline,
                           color: theme.colorScheme.error.withOpacity(0.7)),

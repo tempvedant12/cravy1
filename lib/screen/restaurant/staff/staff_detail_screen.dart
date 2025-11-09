@@ -2,9 +2,11 @@ import 'dart:ui'; // Added for BackdropFilter
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cravy/screen/restaurant/staff/add_edit_staff_screen.dart';
 import 'package:cravy/screen/restaurant/staff/staff_and_roles_screen.dart';
+import 'package:cravy/screen/restaurant/staff/staff_payment_dialogs.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'dart:async'; // Import for StreamSubscription
+
 
 class StaffDetailScreen extends StatefulWidget {
   final String restaurantId;
@@ -121,9 +123,18 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
                     return _buildDetailsTab(theme, staffData);
                   },
                 ),
-                _AttendanceHistoryTab(
-                    restaurantId: widget.restaurantId,
-                    staffId: widget.staff.id),
+                // --- MODIFIED: Pass staff to attendance tab ---
+                FutureBuilder<Staff>(
+                  future: _staffFuture,
+                  builder: (context, snapshot) {
+                    final staffData = snapshot.data ?? widget.staff;
+                    return _AttendanceHistoryTab(
+                      restaurantId: widget.restaurantId,
+                      staff: staffData, // Pass the full staff object
+                    );
+                  },
+                ),
+                // ---------------------------------------------
                 FutureBuilder<Staff>(
                   future: _staffFuture,
                   builder: (context, snapshot) {
@@ -207,12 +218,38 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
                   'Pay Rate',
                   staff.payRate == 0
                       ? 'N/A'
-                      : '₹${staff.payRate.toStringAsFixed(2)} / ${staff.paymentType.toLowerCase() == 'salary' ? 'month' : 'hour'}'),
+                  // --- FIX: Added 'daily' logic ---
+                      : '₹${staff.payRate.toStringAsFixed(2)} / ${staff.paymentType.toLowerCase() == 'salary' ? 'month' : (staff.paymentType.toLowerCase() == 'daily' ? 'day' : 'hour')}'),
+              // --- NEW: Show Salary Payday ---
+              if (staff.paymentType == 'Salary')
+                _buildDetailRow(
+                    theme,
+                    Icons.calendar_month_outlined,
+                    'Salary Payday',
+                    '${staff.salaryPayday.toString()}${_getDaySuffix(staff.salaryPayday)} of the month'
+                ),
+              // ---------------------------------
             ],
           ),
         ),
       ],
     );
+  }
+
+  String _getDaySuffix(int day) {
+    if (day >= 11 && day <= 13) {
+      return 'th';
+    }
+    switch (day % 10) {
+      case 1:
+        return 'st';
+      case 2:
+        return 'nd';
+      case 3:
+        return 'rd';
+      default:
+        return 'th';
+    }
   }
 
   Widget _buildDetailRow(
@@ -242,10 +279,10 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
 // --- REFACTORED ATTENDANCE TAB (NOW STATEFUL WITH CALENDAR) ---
 class _AttendanceHistoryTab extends StatefulWidget {
   final String restaurantId;
-  final String staffId;
+  final Staff staff; // <-- Changed from staffId to full Staff object
 
   const _AttendanceHistoryTab(
-      {required this.restaurantId, required this.staffId});
+      {required this.restaurantId, required this.staff});
 
   @override
   State<_AttendanceHistoryTab> createState() => _AttendanceHistoryTabState();
@@ -257,36 +294,43 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
   DateTime? _selectedDay =
   DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
-  // Stores the attendance for the _focusedMonth
   Map<DateTime, Attendance> _attendanceEvents = {};
+  // --- NEW: Store payments that overlap with this month ---
+  List<StaffPayment> _monthPayments = [];
+  // ------------------------------------------------------
   Attendance? _selectedDayAttendance;
 
   StreamSubscription? _attendanceSubscription;
+  StreamSubscription? _paymentSubscription; // <-- NEW
 
   @override
   void initState() {
     super.initState();
-    _fetchMonthAttendance();
+    _fetchMonthData(); // <-- Renamed
   }
 
   @override
   void dispose() {
     _attendanceSubscription?.cancel();
+    _paymentSubscription?.cancel(); // <-- NEW
     super.dispose();
   }
 
-  void _fetchMonthAttendance() {
+  // --- MODIFIED: Fetches both attendance and payments ---
+  void _fetchMonthData() {
     _attendanceSubscription?.cancel();
+    _paymentSubscription?.cancel();
 
     final startOfMonth = _focusedMonth;
     final endOfMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1, 0)
         .add(const Duration(days: 1));
 
+    // 1. Fetch Attendance
     _attendanceSubscription = FirebaseFirestore.instance
         .collection('restaurants')
         .doc(widget.restaurantId)
         .collection('attendance')
-        .where('staffId', isEqualTo: widget.staffId)
+        .where('staffId', isEqualTo: widget.staff.id) // Use staff.id
         .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfMonth))
         .where('date', isLessThan: Timestamp.fromDate(endOfMonth))
         .snapshots()
@@ -302,7 +346,31 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
         });
       }
     });
+
+    // 2. Fetch Payments
+    _paymentSubscription = FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('staff')
+        .doc(widget.staff.id)
+        .collection('payments')
+    // Find payments where the *period* overlaps with the *month*
+        .where('payPeriodEnd', isGreaterThanOrEqualTo: startOfMonth)
+    // We also need to check the start, but Firestore can't do two range filters on different fields.
+    // So we filter by end date and will manually filter by start date in the listener.
+        .snapshots()
+        .listen((snapshot) {
+      if (mounted) {
+        setState(() {
+          _monthPayments = snapshot.docs
+              .map((doc) => StaffPayment.fromFirestore(doc))
+              .where((p) => p.payPeriodStart != null && p.payPeriodStart!.isBefore(endOfMonth)) // Manual filter
+              .toList();
+        });
+      }
+    });
   }
+  // ----------------------------------------------------
 
   void _updateSelectedDayAttendance() {
     if (_selectedDay == null) {
@@ -329,8 +397,9 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
       // Clear selected day when changing month
       _selectedDay = null;
       _selectedDayAttendance = null;
+      _monthPayments = []; // Clear old payment data
     });
-    _fetchMonthAttendance();
+    _fetchMonthData(); // <-- Renamed
   }
 
   Future<void> _toggleSelectedDayAttendance() async {
@@ -357,7 +426,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
     if (_selectedDayAttendance == null) {
       // No record, create one (mark as PRESENT)
       await attendanceRef.add({
-        'staffId': widget.staffId,
+        'staffId': widget.staff.id,
         'date': Timestamp.fromDate(normalizedDay), // Use normalized day
         'isPresent': true,
       });
@@ -450,8 +519,6 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
       crossAxisCount: 7,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      // --- FIX: Changed aspect ratio to make header row shorter ---
-
       childAspectRatio: 4.0,
       children: daysOfWeek
           .map((day) => Center(
@@ -475,7 +542,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 7,
         // --- FIX: Changed aspect ratio to 1.0 to make cells square ---
-        childAspectRatio: 5.0,
+        childAspectRatio: 1.0,
       ),
       itemCount: daysInMonth + gridStartIndex,
       shrinkWrap: true,
@@ -494,6 +561,15 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             date.month == _selectedDay!.month &&
             date.day == _selectedDay!.day;
 
+        // --- NEW: Check if this day is part of a paid period ---
+        final bool isPaid = _monthPayments.any((p) {
+          // Normalize dates to ignore time
+          final startDate = DateTime(p.payPeriodStart!.year, p.payPeriodStart!.month, p.payPeriodStart!.day);
+          final endDate = DateTime(p.payPeriodEnd!.year, p.payPeriodEnd!.month, p.payPeriodEnd!.day);
+          return !date.isBefore(startDate) && !date.isAfter(endDate);
+        });
+        // ------------------------------------------------------
+
         return GestureDetector(
           onTap: () => _onDaySelected(date),
           child: AnimatedContainer(
@@ -508,6 +584,18 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             child: Stack(
               alignment: Alignment.center,
               children: [
+                // --- NEW: Show dollar sign if paid ---
+                if (isPaid)
+                  Positioned(
+                    top: 4,
+                    left: 4,
+                    child: Icon(
+                      Icons.attach_money,
+                      color: Colors.green.withOpacity(0.8),
+                      size: 14,
+                    ),
+                  ),
+                // -------------------------------------
                 Text(day.toString()),
                 if (attendance != null)
                   Positioned(
@@ -549,9 +637,12 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
     status == null ? 'No Record' : (status ? 'Present' : 'Absent');
     final Color statusColor =
     status == null ? Colors.grey : (status ? Colors.green : Colors.red);
+
+    // --- FIX: Shorter button text to prevent overflow ---
     final String buttonText = status == null
-        ? 'Mark as Present'
-        : (status ? 'Mark as Absent' : 'Mark as Present');
+        ? 'Mark Present'
+        : (status ? 'Mark Absent' : 'Mark Present');
+    // ----------------------------------------------------
 
     // Disable button for future dates
     final bool isFutureDate = _selectedDay!.isAfter(
@@ -578,6 +669,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             const SizedBox(height: 12),
             ElevatedButton(
               onPressed: isFutureDate ? null : _toggleSelectedDayAttendance,
+              // --- FIX: Use new button text ---
               child: Text(isFutureDate ? 'Cannot Edit Future' : buttonText),
             )
           ],
@@ -591,73 +683,34 @@ class _PaymentHistoryTab extends StatelessWidget {
 
   const _PaymentHistoryTab({required this.restaurantId, required this.staff});
 
+  // --- MODIFIED: Call the new public function ---
   void _logPayment(BuildContext context) {
-    final amountController = TextEditingController();
-    final notesController = TextEditingController();
-
-    // Set default amount based on pay rate
-    if (staff.paymentType == 'Salary' && staff.payRate > 0) {
-      amountController.text = staff.payRate.toStringAsFixed(2);
-    }
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Log Payment'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextFormField(
-              controller: amountController,
-              decoration: const InputDecoration(labelText: 'Amount Paid (₹)'),
-              keyboardType:
-              const TextInputType.numberWithOptions(decimal: true),
-              validator: (val) => (double.tryParse(val ?? '') ?? 0) <= 0
-                  ? 'Enter a valid amount'
-                  : null,
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: notesController,
-              decoration:
-              const InputDecoration(labelText: 'Notes (e.g., Nov Salary)'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final amount = double.tryParse(amountController.text);
-              if (amount == null || amount <= 0) return;
-
-              await FirebaseFirestore.instance
-                  .collection('restaurants')
-                  .doc(restaurantId)
-                  .collection('staff')
-                  .doc(staff.id)
-                  .collection('payments')
-                  .add({
-                'amount': amount,
-                'notes': notesController.text.trim(),
-                'paidAt': FieldValue.serverTimestamp(),
-                'payRate': staff.payRate,
-                'paymentType': staff.paymentType,
-              });
-              Navigator.of(dialogContext).pop();
-            },
-            child: const Text('Save Payment'),
-          ),
-        ],
-      ),
-    );
+    showStaffPaymentDialog(context, staff, restaurantId);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    // --- NEW: Dynamic FAB label ---
+    String fabLabel = 'Log Payment';
+    IconData fabIcon = Icons.add;
+    switch (staff.paymentType) {
+      case 'Salary':
+        fabLabel = 'Pay Salary';
+        fabIcon = Icons.calendar_month_outlined;
+        break;
+      case 'Daily':
+        fabLabel = 'Log Daily Pay';
+        fabIcon = Icons.today_outlined;
+        break;
+      case 'Hourly':
+        fabLabel = 'Log Hourly Pay';
+        fabIcon = Icons.access_time_outlined;
+        break;
+    }
+    // ----------------------------
+
     return Scaffold(
       backgroundColor: Colors.transparent, // For background
       body: StreamBuilder<QuerySnapshot>(
@@ -677,32 +730,52 @@ class _PaymentHistoryTab extends StatelessWidget {
             return const Center(child: Text('No payment history found.'));
           }
 
-          final payments = snapshot.data!.docs;
+          // --- MODIFIED: Use new StaffPayment model ---
+          final payments = snapshot.data!.docs
+              .map((doc) => StaffPayment.fromFirestore(doc))
+              .toList();
 
           return ListView.builder(
             padding: const EdgeInsets.all(16),
             itemCount: payments.length,
             itemBuilder: (context, index) {
-              final payment = payments[index].data() as Map<String, dynamic>;
-              final amount = (payment['amount'] as num?)?.toDouble() ?? 0.0;
-              final paidAt = (payment['paidAt'] as Timestamp?)?.toDate();
-              final notes = payment['notes'] as String? ?? '';
+              final payment = payments[index];
+              final String title = '₹${payment.amount.toStringAsFixed(2)}';
+
+              // --- NEW: Detailed subtitle ---
+              String subtitle =
+                  'Paid on: ${DateFormat.yMMMd().add_jm().format(payment.paidAt)}';
+
+              if (payment.paymentType == 'Salary' && payment.payPeriodStart != null) {
+                subtitle += '\nFor: ${DateFormat.yMMMM().format(payment.payPeriodStart!)}';
+              } else if (payment.payPeriodStart != null && payment.payPeriodEnd != null) {
+                // Check if it's a single day
+                final start = payment.payPeriodStart!;
+                final end = payment.payPeriodEnd!;
+                if (start.year == end.year && start.month == end.month && start.day == end.day) {
+                  subtitle += '\nFor: ${DateFormat.yMMMd().format(start)}';
+                } else {
+                  subtitle += '\nPeriod: ${DateFormat.yMd().format(start)} - ${DateFormat.yMd().format(end)}';
+                }
+              }
+              if (payment.notes.isNotEmpty) {
+                subtitle += '\nNotes: ${payment.notes}';
+              }
+              // -----------------------------
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 child: ListTile(
                   leading: CircleAvatar(
                     backgroundColor: theme.primaryColor.withOpacity(0.1),
-                    child: Icon(Icons.check, color: theme.primaryColor),
+                    child: Icon(Icons.attach_money, color: theme.primaryColor),
                   ),
                   title: Text(
-                    '₹${amount.toStringAsFixed(2)}',
+                    title,
                     style: const TextStyle(
                         fontWeight: FontWeight.bold, fontSize: 18),
                   ),
-                  subtitle: Text(
-                    '${paidAt != null ? DateFormat.yMMMd().add_jm().format(paidAt) : 'N/A'}${notes.isNotEmpty ? '\n$notes' : ''}',
-                  ),
+                  subtitle: Text(subtitle), // Use new subtitle
                   trailing:
                   const Icon(Icons.check_circle, color: Colors.green),
                 ),
@@ -713,9 +786,253 @@ class _PaymentHistoryTab extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _logPayment(context),
-        icon: const Icon(Icons.add),
-        label: const Text('Log Payment'),
+        icon: Icon(fabIcon), // Use new icon
+        label: Text(fabLabel), // Use new label
       ),
+    );
+  }
+}
+
+class _PaySalaryDialog extends StatefulWidget {
+  final String restaurantId;
+  final Staff staff;
+
+  const _PaySalaryDialog({required this.restaurantId, required this.staff});
+
+  @override
+  State<_PaySalaryDialog> createState() => _PaySalaryDialogState();
+}
+
+class _PaySalaryDialogState extends State<_PaySalaryDialog> {
+  late Future<List<StaffPayment>> _paymentHistoryFuture;
+  Set<String> _paidMonths = {}; // Stores "YYYY-MM"
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+
+  @override
+  void initState() {
+    super.initState();
+    _paymentHistoryFuture = _fetchPaymentHistory();
+  }
+
+  Future<List<StaffPayment>> _fetchPaymentHistory() async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('staff')
+        .doc(widget.staff.id)
+        .collection('payments')
+        .where('paymentType', isEqualTo: 'Salary')
+        .get();
+
+    final payments = snapshot.docs.map((doc) => StaffPayment.fromFirestore(doc)).toList();
+    _paidMonths = payments
+        .where((p) => p.payPeriodStart != null)
+        .map((p) => DateFormat('yyyy-MM').format(p.payPeriodStart!))
+        .toSet();
+
+    return payments;
+  }
+
+  Future<void> _payMonth(DateTime month) async {
+    final notes = 'Salary for ${DateFormat.yMMMM().format(month)}';
+    final amount = widget.staff.payRate;
+    final payPeriodStart = month;
+    final payPeriodEnd = DateTime(month.year, month.month + 1, 0); // Last day of the month
+
+    await FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('staff')
+        .doc(widget.staff.id)
+        .collection('payments')
+        .add({
+      'amount': amount,
+      'notes': notes,
+      'paidAt': FieldValue.serverTimestamp(),
+      'payRate': widget.staff.payRate,
+      'paymentType': 'Salary',
+      'payPeriodStart': Timestamp.fromDate(payPeriodStart),
+      'payPeriodEnd': Timestamp.fromDate(payPeriodEnd),
+    });
+
+    if (mounted) {
+      Navigator.of(context).pop(); // Close the dialog
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: Text('Pay Salary for ${widget.staff.name}'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: FutureBuilder<List<StaffPayment>>(
+          future: _paymentHistoryFuture,
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            // Generate list of last 12 months
+            final months = List.generate(12, (index) {
+              return DateTime(DateTime.now().year, DateTime.now().month - index, 1);
+            });
+
+            return ListView.builder(
+              shrinkWrap: true,
+              itemCount: months.length,
+              itemBuilder: (context, index) {
+                final month = months[index];
+                final monthKey = DateFormat('yyyy-MM').format(month);
+                final isPaid = _paidMonths.contains(monthKey);
+
+                return ListTile(
+                  title: Text(DateFormat.yMMMM().format(month)),
+                  subtitle: Text('Amount: ₹${widget.staff.payRate.toStringAsFixed(2)}'),
+                  trailing: isPaid
+                      ? const Chip(label: Text('PAID'), backgroundColor: Colors.green)
+                      : ElevatedButton(
+                    onPressed: () => _payMonth(month),
+                    child: const Text('Pay'),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close')),
+      ],
+    );
+  }
+}
+
+class _PayGenericDialog extends StatefulWidget {
+  final String restaurantId;
+  final Staff staff;
+
+  const _PayGenericDialog({required this.restaurantId, required this.staff});
+
+  @override
+  State<_PayGenericDialog> createState() => _PayGenericDialogState();
+}
+
+class _PayGenericDialogState extends State<_PayGenericDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _amountController = TextEditingController();
+  final _notesController = TextEditingController();
+  DateTimeRange? _payPeriod;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.staff.paymentType == 'Daily') {
+      _payPeriod = DateTimeRange(start: DateTime.now(), end: DateTime.now());
+    } else {
+      // Default to the last week for hourly
+      final today = DateTime.now();
+      final startOfWeek = today.subtract(Duration(days: today.weekday + 6));
+      _payPeriod = DateTimeRange(start: startOfWeek, end: today);
+    }
+  }
+
+  Future<void> _selectDateRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: _payPeriod,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
+    );
+    if (picked != null) {
+      setState(() {
+        _payPeriod = picked;
+      });
+    }
+  }
+
+  Future<void> _savePayment() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_payPeriod == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a pay period.')));
+      return;
+    }
+
+    final amount = double.tryParse(_amountController.text);
+
+    await FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('staff')
+        .doc(widget.staff.id)
+        .collection('payments')
+        .add({
+      'amount': amount,
+      'notes': _notesController.text.trim(),
+      'paidAt': FieldValue.serverTimestamp(),
+      'payRate': widget.staff.payRate,
+      'paymentType': widget.staff.paymentType,
+      'payPeriodStart': Timestamp.fromDate(_payPeriod!.start),
+      'payPeriodEnd': Timestamp.fromDate(_payPeriod!.end),
+    });
+
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDaily = widget.staff.paymentType == 'Daily';
+
+    return AlertDialog(
+      title: Text('Log ${widget.staff.paymentType} Pay'),
+      content: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _amountController,
+                decoration: const InputDecoration(labelText: 'Amount Paid (₹)'),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                validator: (val) => (double.tryParse(val ?? '') ?? 0) <= 0
+                    ? 'Enter a valid amount'
+                    : null,
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(isDaily ? 'Pay Date' : 'Pay Period'),
+                subtitle: Text(_payPeriod == null ? 'Not Set' :
+                (isDaily ? DateFormat.yMMMd().format(_payPeriod!.start)
+                    : '${DateFormat.yMd().format(_payPeriod!.start)} - ${DateFormat.yMd().format(_payPeriod!.end)}')),
+                trailing: const Icon(Icons.calendar_today),
+                onTap: _selectDateRange,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _notesController,
+                decoration: InputDecoration(labelText: 'Notes (e.g., ${isDaily ? 'Bonus' : '40 hours'})'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
+        ElevatedButton(
+          onPressed: _savePayment,
+          child: const Text('Save Payment'),
+        ),
+      ],
     );
   }
 }
