@@ -1,4 +1,6 @@
-import 'dart:ui'; // Import for UI effects
+// lib/screen/restaurant/staff/add_edit_staff_screen.dart
+
+import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,22 +20,23 @@ class AddEditStaffScreen extends StatefulWidget {
 
 class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
   final _formKey = GlobalKey<FormState>();
-  bool _isLoading = false; // Added for loading state
+  bool _isLoading = false;
 
   late String _name;
   late String _role;
   late String _phone;
   late String _email;
-  // --- NEW FIELDS ---
   late double _payRate;
   late String _paymentType;
   late TextEditingController _payRateController;
-  late int _salaryPayday; // <-- ADD THIS
-  late TextEditingController _paydayController; // <-- ADD THIS
+  late int _salaryPayday;
+  late TextEditingController _paydayController;
 
-  // --- *** MODIFICATION 1: Added 'Daily' *** ---
+  // --- NEW: Shift Start Time ---
+  TimeOfDay _shiftStartTime = const TimeOfDay(hour: 9, minute: 0);
+  // -----------------------------
+
   final List<String> _paymentTypes = ['Salary', 'Hourly', 'Daily', 'N/A'];
-  // ------------------
 
   @override
   void initState() {
@@ -42,30 +45,54 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
     _role = widget.staff?.role ?? 'Staff';
     _phone = widget.staff?.phone ?? '';
     _email = widget.staff?.email ?? '';
-    // --- NEW FIELDS ---
     _payRate = widget.staff?.payRate ?? 0.0;
     _paymentType = (widget.staff?.paymentType.isEmpty ?? true)
         ? 'N/A'
         : widget.staff!.paymentType;
     _payRateController =
         TextEditingController(text: _payRate == 0 ? '' : _payRate.toString());
-    _salaryPayday = widget.staff?.salaryPayday ?? 1; // <-- ADD THIS
-    _paydayController = TextEditingController(
-        text: _salaryPayday.toString()); // <-- ADD THIS
-    // ------------------
+    _salaryPayday = widget.staff?.salaryPayday ?? 1;
+    _paydayController = TextEditingController(text: _salaryPayday.toString());
+
+    // --- NEW: Initialize Shift Time from existing data ---
+    if (widget.staff != null && widget.staff!.shiftStartTime.isNotEmpty) {
+      final parts = widget.staff!.shiftStartTime.split(':');
+      if (parts.length == 2) {
+        _shiftStartTime = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+      }
+    }
+    // ----------------------------------
   }
 
   @override
   void dispose() {
     _payRateController.dispose();
-    _paydayController.dispose(); // <-- ADD THIS
+    _paydayController.dispose();
     super.dispose();
   }
+
+  // --- NEW: Helper to select time ---
+  Future<void> _selectShiftTime() async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: _shiftStartTime,
+    );
+    if (picked != null && picked != _shiftStartTime) {
+      setState(() {
+        _shiftStartTime = picked;
+      });
+    }
+  }
+  // ---------------------------------
 
   void _saveStaff() async {
     if (_formKey.currentState!.validate()) {
       _formKey.currentState!.save();
-      setState(() => _isLoading = true); // Start loading
+      setState(() => _isLoading = true);
+
+      // Format time as HH:mm for saving
+      final String formattedShiftTime =
+          '${_shiftStartTime.hour.toString().padLeft(2, '0')}:${_shiftStartTime.minute.toString().padLeft(2, '0')}';
 
       final staffData = {
         'name': _name,
@@ -74,7 +101,8 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
         'email': _email,
         'payRate': _payRate,
         'paymentType': _paymentType,
-        'salaryPayday': _paymentType == 'Salary' ? _salaryPayday : 1, // <-- ADD THIS
+        'salaryPayday': _paymentType == 'Salary' ? _salaryPayday : 1,
+        'shiftStartTime': formattedShiftTime, // <-- SAVE THIS
       };
       try {
         if (widget.staff == null) {
@@ -99,7 +127,7 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
           );
         }
       } finally {
-        if (mounted) setState(() => _isLoading = false); // Stop loading
+        if (mounted) setState(() => _isLoading = false);
       }
     }
   }
@@ -152,11 +180,10 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      extendBodyBehindAppBar: true, // For background
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: Text(widget.staff == null ? 'Add Staff' : 'Edit Staff'),
-        backgroundColor:
-        theme.scaffoldBackgroundColor.withOpacity(0.85), // Glassmorphic
+        backgroundColor: theme.scaffoldBackgroundColor.withOpacity(0.85),
         elevation: 0,
         actions: [
           if (widget.staff != null)
@@ -169,7 +196,7 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
       ),
       body: Stack(
         children: [
-          const _StaticBackground(), // Add background
+          const _StaticBackground(),
           SafeArea(
             child: Form(
               key: _formKey,
@@ -216,6 +243,22 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
                         keyboardType: TextInputType.emailAddress,
                         onSaved: (value) => _email = value!,
                       ),
+
+                      // --- NEW: Shift Start Time Picker UI ---
+                      const SizedBox(height: 20),
+                      GestureDetector(
+                        onTap: _selectShiftTime,
+                        child: AbsorbPointer(
+                          child: _buildGlassTextField(
+                            label: 'Shift Start Time',
+                            icon: Icons.access_time,
+                            // Convert TimeOfDay to display string (e.g. 9:00 AM)
+                            controller: TextEditingController(text: _shiftStartTime.format(context)),
+                          ),
+                        ),
+                      ),
+                      // ------------------------------------
+
                       const Divider(height: 40),
                       _buildGlassDropdownField(
                         value: _paymentType,
@@ -245,7 +288,6 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
                           FilteringTextInputFormatter.allow(
                               RegExp(r'^\d+\.?\d{0,2}')),
                         ],
-                        // --- *** MODIFICATION 2: Updated suffix logic *** ---
                         suffixText: _paymentType == 'N/A'
                             ? ''
                             : '/ ${_paymentType.toLowerCase() == 'salary' ? 'month' : (_paymentType.toLowerCase() == 'daily' ? 'day' : 'hour')}',
@@ -308,7 +350,6 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
     );
   }
 
-  // --- NEW: Helper widget for glass text fields ---
   Widget _buildGlassTextField({
     TextEditingController? controller,
     String? initialValue,
@@ -350,7 +391,6 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
     );
   }
 
-  // --- NEW: Helper widget for glass dropdowns ---
   Widget _buildGlassDropdownField<T>({
     required T value,
     required String label,
@@ -388,7 +428,6 @@ class _AddEditStaffScreenState extends State<AddEditStaffScreen> {
   }
 }
 
-// --- NEW: BACKGROUND WIDGET ---
 class _StaticBackground extends StatelessWidget {
   const _StaticBackground();
   @override

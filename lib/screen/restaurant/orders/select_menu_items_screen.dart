@@ -643,7 +643,7 @@ class _MenuContentState extends State<_MenuContent>
 
           return Column(
             children: [
-              _buildSearchAction(context, _searchController),
+              _buildSearchAction(context, _searchController, allItems),
               TabBar(
                 controller: _foodTypeTabController,
                 tabs: const [
@@ -922,12 +922,17 @@ class SelectableItemCard extends StatelessWidget {
                                       shape: BoxShape.circle,
                                     ),
                                   ),
-                                Flexible(
-                                  child: Text(item.name,
-                                      textAlign: TextAlign.center,
-                                      style: theme.textTheme.titleMedium,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis),
+                                Expanded(
+                                  child: Text(
+                                    item.name,
+                                    textAlign: TextAlign.center,
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13 // Slightly smaller font to fit more text
+                                    ),
+                                    maxLines: 4, // Allows text to wrap up to 4 lines
+                                    overflow: TextOverflow.ellipsis, // Shows ... if it's longer than 4 lines
+                                  ),
                                 ),
                               ],
                             ),
@@ -1238,21 +1243,85 @@ class _CustomizeItemDialogState extends State<_CustomizeItemDialog> {
 }
 
 Widget _buildSearchAction(
-    BuildContext context, TextEditingController controller) {
+    BuildContext context,
+    TextEditingController controller,
+    List<MenuDisplayItem> allItems // <--- Pass the items list here
+    ) {
   return Padding(
     padding: const EdgeInsets.all(8.0),
-    child: TextField(
-      controller: controller,
-      decoration: InputDecoration(
-        hintText: 'Search items...',
-        prefixIcon: const Icon(Icons.search, size: 20),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-        border: OutlineInputBorder(
+    child: Autocomplete<String>(
+      // 1. Logic to find the hints
+      optionsBuilder: (TextEditingValue textEditingValue) {
+        if (textEditingValue.text.isEmpty) {
+          return const Iterable<String>.empty();
+        }
+        return allItems
+            .map((e) => e.name) // Get just the names
+            .where((name) => name.toLowerCase().contains(textEditingValue.text.toLowerCase()));
+      },
+
+      // 2. What happens when user clicks a hint
+      onSelected: (String selection) {
+        controller.text = selection; // Update your main controller to trigger the filter
+      },
+
+      // 3. Keep your existing Design (Glassmorphism TextField)
+      fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
+        // We sync the internal autocomplete controller with your main _searchController
+        if (controller.text != textEditingController.text) {
+          textEditingController.text = controller.text;
+        }
+
+        // This ensures typing updates your main controller immediately, not just on selection
+        textEditingController.addListener(() {
+          if (controller.text != textEditingController.text) {
+            controller.text = textEditingController.text;
+          }
+        });
+
+        return TextField(
+          controller: textEditingController,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            hintText: 'Search items...',
+            prefixIcon: const Icon(Icons.search, size: 20),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none),
+            filled: true,
+            fillColor: Theme.of(context).colorScheme.surface.withOpacity(0.5),
+          ),
+        );
+      },
+
+      // 4. Design the suggestion list (The Hints)
+      optionsViewBuilder: (context, onSelected, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4.0,
             borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none),
-        filled: true,
-        fillColor: Theme.of(context).colorScheme.surface.withOpacity(0.5),
-      ),
+            child: Container(
+              width: MediaQuery.of(context).size.width - 32, // Match padding width
+              color: Theme.of(context).cardColor,
+              constraints: const BoxConstraints(maxHeight: 200), // Max height of dropdown
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: options.length,
+                itemBuilder: (BuildContext context, int index) {
+                  final String option = options.elementAt(index);
+                  return ListTile(
+                    title: Text(option),
+                    onTap: () => onSelected(option),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     ),
   );
 }

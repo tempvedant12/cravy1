@@ -1,3 +1,5 @@
+// lib/screen/restaurant/staff/staff_and_roles_screen.dart
+
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cravy/screen/restaurant/staff/staff_detail_screen.dart';
@@ -5,9 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:intl/intl.dart';
 import 'add_edit_staff_screen.dart';
-import 'staff_payment_dialogs.dart'; // <-- IMPORT THE NEW DIALOGS
+import 'staff_payment_dialogs.dart';
 
-// --- UPDATED Staff Model ---
+// --- UPDATED Staff Model with Shift Time ---
 class Staff {
   final String id;
   final String name;
@@ -16,7 +18,8 @@ class Staff {
   final String email;
   final double payRate;
   final String paymentType;
-  final int salaryPayday; // <-- ADD THIS
+  final int salaryPayday;
+  final String shiftStartTime; // Format: "HH:mm"
 
   Staff({
     required this.id,
@@ -26,7 +29,8 @@ class Staff {
     required this.email,
     required this.payRate,
     required this.paymentType,
-    required this.salaryPayday, // <-- ADD THIS
+    required this.salaryPayday,
+    required this.shiftStartTime,
   });
 
   factory Staff.fromFirestore(DocumentSnapshot doc) {
@@ -39,23 +43,28 @@ class Staff {
       email: data['email'] ?? '',
       payRate: (data['payRate'] as num?)?.toDouble() ?? 0.0,
       paymentType: data['paymentType'] ?? '',
-      salaryPayday: (data['salaryPayday'] as num?)?.toInt() ?? 1, // <-- ADD THIS
+      salaryPayday: (data['salaryPayday'] as num?)?.toInt() ?? 1,
+      shiftStartTime: data['shiftStartTime'] ?? '09:00', // Default 9 AM
     );
   }
 }
 
-// --- NEW Attendance Model (simplified from old file) ---
+// --- UPDATED Attendance Model ---
 class Attendance {
   final String id;
   final String staffId;
   final DateTime date;
-  final bool isPresent;
+  final DateTime? checkIn;
+  final DateTime? checkOut;
+  final String status; // 'Late', 'Present', 'Absent', 'Early'
 
   Attendance({
     required this.id,
     required this.staffId,
     required this.date,
-    required this.isPresent,
+    this.checkIn,
+    this.checkOut,
+    this.status = '',
   });
 
   factory Attendance.fromFirestore(DocumentSnapshot doc) {
@@ -64,24 +73,24 @@ class Attendance {
       id: doc.id,
       staffId: data['staffId'],
       date: (data['date'] as Timestamp).toDate(),
-      isPresent: data['isPresent'],
+      checkIn: (data['checkIn'] as Timestamp?)?.toDate(),
+      checkOut: (data['checkOut'] as Timestamp?)?.toDate(),
+      status: data['status'] ?? '',
     );
   }
 }
 
-// --- NEW Combined Model ---
+// --- Combined Model ---
 class StaffWithAttendance {
   final Staff staff;
   final Attendance? attendance;
-  final bool isPresent;
 
   StaffWithAttendance({
     required this.staff,
     this.attendance,
-  }) : isPresent = attendance?.isPresent ?? false;
+  });
 }
 
-// --- HEAVILY MODIFIED SCREEN ---
 class StaffAndRolesScreen extends StatefulWidget {
   final String restaurantId;
   const StaffAndRolesScreen({super.key, required this.restaurantId});
@@ -94,28 +103,19 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
   final DateTime _today =
   DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
-  Future<void> _toggleAttendance(Staff staff, Attendance? attendance) async {
-    final attendanceRef = FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId)
-        .collection('attendance');
-
-    if (attendance == null) {
-      // No record for today exists, create one
-      await attendanceRef.add({
-        'staffId': staff.id,
-        'date': Timestamp.fromDate(_today),
-        'isPresent': true, // Mark as present on first toggle
-      });
-    } else {
-      // Record exists, update it
-      await attendanceRef
-          .doc(attendance.id)
-          .update({'isPresent': !attendance.isPresent});
-    }
+  // --- NEW: Open Mark Attendance Dialog ---
+  void _openMarkAttendanceDialog(Staff staff, Attendance? attendance) {
+    showDialog(
+      context: context,
+      builder: (context) => _MarkAttendanceDialog(
+        restaurantId: widget.restaurantId,
+        staff: staff,
+        existingAttendance: attendance,
+        date: _today,
+      ),
+    );
   }
 
-  // --- NEW: Delete Staff Function ---
   Future<void> _deleteStaff(Staff staff) async {
     final bool? confirm = await showDialog(
       context: context,
@@ -139,16 +139,12 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
     );
 
     if (confirm == true) {
-      // Note: In a production app, you might want a Cloud Function
-      // to delete subcollections (like payments). Here, we just delete the main staff doc.
       await FirebaseFirestore.instance
           .collection('restaurants')
           .doc(widget.restaurantId)
           .collection('staff')
           .doc(staff.id)
           .delete();
-
-      // TODO: Also delete attendance records where staffId == staff.id
     }
   }
 
@@ -156,28 +152,18 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      extendBodyBehindAppBar: true, // For background
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: Text('Staff Attendance (${DateFormat.yMMMd().format(_today)})'),
         backgroundColor:
-        theme.scaffoldBackgroundColor.withOpacity(0.85), // Glassmorphic app bar
+        theme.scaffoldBackgroundColor.withOpacity(0.85),
         elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.group_outlined),
-            tooltip: 'Manage Roles (Coming Soon)',
-            onPressed: () {
-              // Placeholder for role management screen
-            },
-          ),
-        ],
       ),
       body: Stack(
         children: [
-          const _StaticBackground(), // Add background
+          const _StaticBackground(),
           SafeArea(
             child: StreamBuilder<QuerySnapshot>(
-              // --- STREAM 1: LISTEN TO STAFF LIST ---
               stream: FirebaseFirestore.instance
                   .collection('restaurants')
                   .doc(widget.restaurantId)
@@ -188,9 +174,6 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
                 if (staffSnapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                if (staffSnapshot.hasError) {
-                  return Center(child: Text('Error: ${staffSnapshot.error}'));
-                }
                 if (!staffSnapshot.hasData ||
                     staffSnapshot.data!.docs.isEmpty) {
                   return const Center(child: Text('No staff members found.'));
@@ -200,7 +183,6 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
                     .map((doc) => Staff.fromFirestore(doc))
                     .toList();
 
-                // --- STREAM 2 (FIX): LISTEN TO ATTENDANCE ---
                 return StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection('restaurants')
@@ -209,8 +191,6 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
                       .where('date', isEqualTo: Timestamp.fromDate(_today))
                       .snapshots(),
                   builder: (context, attendanceSnapshot) {
-                    // --- MERGE LOGIC ---
-                    // We can build the list even if attendance is just waiting
                     final attendanceList = attendanceSnapshot.data?.docs
                         .map((doc) => Attendance.fromFirestore(doc))
                         .toList() ??
@@ -226,7 +206,6 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
                         attendance: attendanceMap[staff.id],
                       );
                     }).toList();
-                    // --- END MERGE LOGIC ---
 
                     return AnimationLimiter(
                       child: ListView.builder(
@@ -241,7 +220,6 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
                               verticalOffset: 50.0,
                               child: FadeInAnimation(
                                 child: _StaffAttendanceCard(
-                                  // --- PASS restaurantId ---
                                   restaurantId: widget.restaurantId,
                                   item: item,
                                   onTap: () {
@@ -252,11 +230,7 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
                                       ),
                                     ));
                                   },
-                                  onToggle: (boolValue) {
-                                    _toggleAttendance(
-                                        item.staff, item.attendance);
-                                  },
-                                  // --- PASS DELETE FUNCTION ---
+                                  onMarkAttendance: () => _openMarkAttendanceDialog(item.staff, item.attendance),
                                   onDelete: () => _deleteStaff(item.staff),
                                 ),
                               ),
@@ -286,19 +260,197 @@ class _StaffAndRolesScreenState extends State<StaffAndRolesScreen> {
   }
 }
 
-// --- NEW: REDESIGNED STAFF CARD ---
+// --- NEW: Mark Attendance Dialog ---
+class _MarkAttendanceDialog extends StatefulWidget {
+  final String restaurantId;
+  final Staff staff;
+  final Attendance? existingAttendance;
+  final DateTime date;
+
+  const _MarkAttendanceDialog({
+    required this.restaurantId,
+    required this.staff,
+    this.existingAttendance,
+    required this.date,
+  });
+
+  @override
+  State<_MarkAttendanceDialog> createState() => _MarkAttendanceDialogState();
+}
+
+class _MarkAttendanceDialogState extends State<_MarkAttendanceDialog> {
+  TimeOfDay? _checkInTime;
+  TimeOfDay? _checkOutTime;
+  String _status = 'Absent'; // Default
+
+  final List<String> _statusOptions = ['Present', 'Late', 'Absent', 'Half Day'];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.existingAttendance != null) {
+      if (widget.existingAttendance!.checkIn != null) {
+        _checkInTime = TimeOfDay.fromDateTime(widget.existingAttendance!.checkIn!);
+      }
+      if (widget.existingAttendance!.checkOut != null) {
+        _checkOutTime = TimeOfDay.fromDateTime(widget.existingAttendance!.checkOut!);
+      }
+      _status = widget.existingAttendance!.status.isNotEmpty
+          ? widget.existingAttendance!.status
+          : 'Absent';
+    } else {
+      // Default to "Present" if creating new and current time matches roughly
+      _status = 'Present';
+      _checkInTime = TimeOfDay.now(); // Auto-suggest current time
+      _calculateAutoStatus(); // Run logic once
+    }
+  }
+
+  // --- LOGIC: Auto-calculate Status ---
+  void _calculateAutoStatus() {
+    if (_checkInTime == null) return;
+
+    final now = DateTime.now();
+    // Parse staff shift start time (e.g. "09:00")
+    final shiftParts = widget.staff.shiftStartTime.split(':');
+    final shiftStart = DateTime(now.year, now.month, now.day,
+        int.parse(shiftParts[0]), int.parse(shiftParts[1]));
+
+    // Create check-in datetime for comparison
+    final checkIn = DateTime(now.year, now.month, now.day,
+        _checkInTime!.hour, _checkInTime!.minute);
+
+    // Tolerance: 15 mins late
+    if (checkIn.isAfter(shiftStart.add(const Duration(minutes: 15)))) {
+      setState(() => _status = 'Late');
+    } else {
+      setState(() => _status = 'Present');
+    }
+  }
+
+  Future<void> _pickCheckInTime() async {
+    final picked = await showTimePicker(context: context, initialTime: _checkInTime ?? TimeOfDay.now());
+    if (picked != null) {
+      setState(() {
+        _checkInTime = picked;
+      });
+      // Auto-update status when time changes
+      _calculateAutoStatus();
+    }
+  }
+
+  Future<void> _pickCheckOutTime() async {
+    final picked = await showTimePicker(context: context, initialTime: _checkOutTime ?? TimeOfDay.now());
+    if (picked != null) {
+      setState(() => _checkOutTime = picked);
+    }
+  }
+
+  Future<void> _save() async {
+    final attendanceRef = FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('attendance');
+
+    final now = widget.date;
+
+    // Combine date with time components
+    DateTime? checkInDateTime;
+    DateTime? checkOutDateTime;
+
+    if (_checkInTime != null) {
+      checkInDateTime = DateTime(now.year, now.month, now.day, _checkInTime!.hour, _checkInTime!.minute);
+    }
+    if (_checkOutTime != null) {
+      checkOutDateTime = DateTime(now.year, now.month, now.day, _checkOutTime!.hour, _checkOutTime!.minute);
+    }
+
+    // If status is Absent, clear times? (Optional, but user said user has power)
+    // We will save whatever the user set.
+
+    final data = {
+      'staffId': widget.staff.id,
+      'date': Timestamp.fromDate(widget.date),
+      'checkIn': checkInDateTime != null ? Timestamp.fromDate(checkInDateTime) : null,
+      'checkOut': checkOutDateTime != null ? Timestamp.fromDate(checkOutDateTime) : null,
+      'status': _status,
+    };
+
+    if (widget.existingAttendance == null) {
+      await attendanceRef.add(data);
+    } else {
+      await attendanceRef.doc(widget.existingAttendance!.id).update(data);
+    }
+
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Mark Attendance: ${widget.staff.name}'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Shift Start:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            Text(widget.staff.shiftStartTime, style: const TextStyle(fontWeight: FontWeight.bold)),
+            const Divider(),
+
+            // Status Dropdown
+            DropdownButtonFormField<String>(
+              value: _status,
+              decoration: const InputDecoration(labelText: 'Status'),
+              items: _statusOptions.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+              onChanged: (val) => setState(() => _status = val!),
+            ),
+            const SizedBox(height: 16),
+
+            // Check In Time
+            ListTile(
+              title: const Text('Check In Time'),
+              subtitle: Text(_checkInTime?.format(context) ?? 'Not Set'),
+              trailing: const Icon(Icons.access_time),
+              onTap: _pickCheckInTime,
+              tileColor: Colors.grey.withOpacity(0.1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            const SizedBox(height: 8),
+
+            // Check Out Time
+            ListTile(
+              title: const Text('Check Out Time'),
+              subtitle: Text(_checkOutTime?.format(context) ?? 'Not Set'),
+              trailing: const Icon(Icons.access_time),
+              onTap: _pickCheckOutTime,
+              tileColor: Colors.grey.withOpacity(0.1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        ElevatedButton(onPressed: _save, child: const Text('Save')),
+      ],
+    );
+  }
+}
+
+// --- UPDATED CARD ---
 class _StaffAttendanceCard extends StatefulWidget {
-  final String restaurantId; // <-- ADDED
+  final String restaurantId;
   final StaffWithAttendance item;
   final VoidCallback onTap;
-  final ValueChanged<bool> onToggle;
+  final VoidCallback onMarkAttendance; // <-- Replaces ClockIn/Out
   final VoidCallback onDelete;
 
   const _StaffAttendanceCard(
-      {required this.restaurantId, // <-- ADDED
+      {required this.restaurantId,
         required this.item,
         required this.onTap,
-        required this.onToggle,
+        required this.onMarkAttendance,
         required this.onDelete});
 
   @override
@@ -307,12 +459,11 @@ class _StaffAttendanceCard extends StatefulWidget {
 
 class _StaffAttendanceCardState extends State<_StaffAttendanceCard> {
   bool _isHovered = false;
-  late Stream<QuerySnapshot> _paymentStream; // <-- ADDED
+  late Stream<QuerySnapshot> _paymentStream;
 
   @override
   void initState() {
     super.initState();
-    // --- ADDED: Stream for last payment ---
     _paymentStream = FirebaseFirestore.instance
         .collection('restaurants')
         .doc(widget.restaurantId)
@@ -330,6 +481,35 @@ class _StaffAttendanceCardState extends State<_StaffAttendanceCard> {
     final String initial =
     widget.item.staff.name.isNotEmpty ? widget.item.staff.name[0] : '?';
 
+    final att = widget.item.attendance;
+
+    String statusText = 'Not Marked';
+    Color statusColor = Colors.grey;
+    String timeInfo = '';
+
+    if (att != null) {
+      statusText = att.status;
+      if (statusText == 'Present') statusColor = Colors.green;
+      else if (statusText == 'Late') statusColor = Colors.orange;
+      else if (statusText == 'Absent') statusColor = Colors.red;
+      else if (statusText == 'Half Day') statusColor = Colors.purple;
+
+      if (att.checkIn != null) {
+        timeInfo = 'In: ${DateFormat.jm().format(att.checkIn!)}';
+      }
+      if (att.checkOut != null) {
+        timeInfo += ' - Out: ${DateFormat.jm().format(att.checkOut!)}';
+
+        // Calculate Duration
+        if (att.checkIn != null) {
+          final diff = att.checkOut!.difference(att.checkIn!);
+          final hours = diff.inHours;
+          final mins = diff.inMinutes.remainder(60);
+          timeInfo += '\n(${hours}h ${mins}m)';
+        }
+      }
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 16.0),
       child: MouseRegion(
@@ -342,7 +522,7 @@ class _StaffAttendanceCardState extends State<_StaffAttendanceCard> {
             borderRadius: BorderRadius.circular(20),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
@@ -360,95 +540,85 @@ class _StaffAttendanceCardState extends State<_StaffAttendanceCard> {
                   end: Alignment.bottomRight,
                 ),
               ),
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: theme.primaryColor,
-                  child: Text(
-                    initial,
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.onPrimary),
+              child: Column(
+                children: [
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      backgroundColor: theme.primaryColor,
+                      child: Text(
+                        initial,
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.onPrimary),
+                      ),
+                    ),
+                    title: Text(widget.item.staff.name,
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(widget.item.staff.role),
+                        if (timeInfo.isNotEmpty)
+                          Text(timeInfo, style: theme.textTheme.bodySmall?.copyWith(fontSize: 11)),
+                      ],
+                    ),
+                    trailing: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: statusColor.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: statusColor.withOpacity(0.5)),
+                          ),
+                          child: Text(statusText,
+                              style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 12)),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                title: Text(widget.item.staff.name,
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                // --- MODIFIED SUBTITLE ---
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(widget.item.staff.role),
-                    const SizedBox(height: 4),
-                    StreamBuilder<QuerySnapshot>(
-                      stream: _paymentStream,
-                      builder: (context, snapshot) {
-                        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                          return const SizedBox.shrink();
-                        }
-                        final payment = StaffPayment.fromFirestore(
-                            snapshot.data!.docs.first);
 
-                        String paidTill = '';
-                        if (payment.paymentType == 'Salary' && payment.payPeriodStart != null) {
-                          paidTill = 'Paid till ${DateFormat.yMMMM().format(payment.payPeriodStart!)}';
-                        } else if (payment.payPeriodEnd != null) {
-                          paidTill = 'Paid till ${DateFormat.yMd().format(payment.payPeriodEnd!)}';
-                        } else {
-                          paidTill = 'Last paid ${DateFormat.yMd().format(payment.paidAt)}';
-                        }
+                  const Divider(height: 1),
 
-                        // --- FIX 2: Wrap the Text in a Flexible widget ---
-                        return Row(
-                          children: [
-                            Icon(Icons.attach_money,
-                                color: Colors.green, size: 16),
-                            const SizedBox(width: 4),
-                            Flexible( // <-- WRAP HERE
-                              child: Text(
-                                paidTill,
-                                style: theme.textTheme.bodySmall
-                                    ?.copyWith(color: Colors.green),
-                                overflow: TextOverflow.visible, // Allow wrap
-                              ),
-                            ),
-                          ],
-                        );
-                        // --- END FIX 2 ---
-                      },
-                    ),
-                  ],
-                ),
-                // --- END MODIFIED SUBTITLE ---
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // --- "QUICK PAY" BUTTON ---
-                    IconButton(
-                      icon: Icon(Icons.payments_outlined,
-                          color: theme.primaryColor),
-                      onPressed: () {
-                        showStaffPaymentDialog(
-                          context,
-                          widget.item.staff,
-                          widget.restaurantId,
-                        );
-                      },
-                      tooltip: 'Log Payment',
-                    ),
+                  // --- ACTION BAR ---
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        TextButton.icon(
+                          onPressed: widget.onMarkAttendance,
+                          icon: const Icon(Icons.access_time),
+                          label: const Text('Mark Attendance'),
+                        ),
 
-                    // --- FIX 1: REMOVED "Present/Absent" Text AND SizedBox ---
-                    Switch(
-                      value: widget.item.isPresent,
-                      onChanged: widget.onToggle,
-                      activeColor: Colors.green,
+                        // Vertical Divider
+                        Container(width: 1, height: 20, color: theme.dividerColor),
+
+                        IconButton(
+                          icon: Icon(Icons.payments_outlined, color: theme.primaryColor),
+                          onPressed: () {
+                            showStaffPaymentDialog(
+                              context,
+                              widget.item.staff,
+                              widget.restaurantId,
+                            );
+                          },
+                          tooltip: 'Log Payment',
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.delete_outline,
+                              color: theme.colorScheme.error.withOpacity(0.7)),
+                          onPressed: widget.onDelete,
+                          tooltip: 'Delete Staff',
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      icon: Icon(Icons.delete_outline,
-                          color: theme.colorScheme.error.withOpacity(0.7)),
-                      onPressed: widget.onDelete,
-                      tooltip: 'Delete Staff',
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),

@@ -17,7 +17,7 @@ class SalesSummary {
   final double totalRevenue;
   final double averageBill;
   final int totalOrders;
-  final double profitEstimate; // This will now be based on Net Income
+  final double profitEstimate;
   SalesSummary(
       {required this.totalRevenue,
         required this.averageBill,
@@ -30,7 +30,9 @@ class ProductPerformance {
   final int unitsSold;
   final double totalSales;
   ProductPerformance(
-      {required this.itemName, required this.unitsSold, required this.totalSales});
+      {required this.itemName,
+        required this.unitsSold,
+        required this.totalSales});
 }
 
 // =======================================================
@@ -49,13 +51,13 @@ class _ReportsScreenState extends State<ReportsScreen>
     with TickerProviderStateMixin {
   late Future<Map<String, dynamic>> _reportDataFuture;
   List<MenuItem> _allMenuItems = [];
-  Map<String, String> _allMenus = {}; // Map<MenuName, MenuName>
+  Map<String, String> _allMenus = {};
 
   // --- Filter State ---
   String _selectedPeriod = 'Today';
   DateTimeRange? _customDateRange;
   String _selectedTransactionType = 'All';
-  String _selectedMenuName = 'All'; // Filter by name, as it's saved on the order
+  String _selectedMenuName = 'All';
   // --------------------
 
   TimeOfDay _businessDayStartTime = const TimeOfDay(hour: 0, minute: 0);
@@ -77,7 +79,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       setState(() => _isLoadingSettings = true);
     }
     try {
-      // 1. Fetch Restaurant Settings (for day start time)
       final doc = await FirebaseFirestore.instance
           .collection('restaurants')
           .doc(widget.restaurantId)
@@ -92,10 +93,9 @@ class _ReportsScreenState extends State<ReportsScreen>
         _businessDayStartTime = const TimeOfDay(hour: 0, minute: 0);
       }
 
-      // 2. Fetch All Menu Items AND Menu Names
-      if (_allMenuItems.isEmpty) {
-        await _fetchAllMenuItemsAndMenus();
-      }
+      // Always fetch menu items to ensure we have the list
+      await _fetchAllMenuItemsAndMenus();
+
     } catch (e) {
       print("Error loading report settings: $e");
     }
@@ -105,8 +105,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<Map<String, dynamic>> _loadData() async {
-    // Ensure settings are loaded before fetching report data
-    if (_isLoadingSettings || _allMenuItems.isEmpty) {
+    if (_isLoadingSettings) {
       await _loadInitialSettings();
     }
     return _fetchReportData(
@@ -125,16 +124,21 @@ class _ReportsScreenState extends State<ReportsScreen>
         .get();
 
     final List<MenuItem> allItems = [];
-    // Initialize with 'All'
     final Map<String, String> allMenus = {'All': 'All Menus'};
 
+    // 1. Add Existing Menus
     for (var menuDoc in menusSnapshot.docs) {
-      // Use menu NAME as the key for filtering, as this is what's on the order item
       allMenus[menuDoc['name']] = menuDoc['name'];
       final itemsSnapshot = await menuDoc.reference.collection('items').get();
       allItems.addAll(
           itemsSnapshot.docs.map((doc) => MenuItem.fromFirestore(doc)));
     }
+
+    // --- FIX: Explicitly add "Quick Bill" and "Uncategorized" to options ---
+    // This ensures users can filter by Quick Bills or Legacy data
+    allMenus['Quick Bill'] = 'Quick Bill';
+    allMenus['Uncategorized'] = 'Uncategorized / Deleted';
+    // -----------------------------------------------------------------------
 
     if (mounted) {
       setState(() {
@@ -153,15 +157,13 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (now.isBefore(todayBusinessStart)) {
       todayBusinessStart = todayBusinessStart.subtract(const Duration(days: 1));
     }
-    DateTime todayBusinessEnd =
-    todayBusinessStart.add(const Duration(days: 1));
+    DateTime todayBusinessEnd = todayBusinessStart.add(const Duration(days: 1));
 
     switch (period) {
       case 'Today':
         return DateTimeRange(start: todayBusinessStart, end: todayBusinessEnd);
       case 'This Week':
-        final daysToSubtract = todayBusinessStart.weekday -
-            1; // 1 (Mon) - 1 = 0; 7 (Sun) - 1 = 6
+        final daysToSubtract = todayBusinessStart.weekday - 1;
         final startOfWeek =
         todayBusinessStart.subtract(Duration(days: daysToSubtract));
         return DateTimeRange(start: startOfWeek, end: todayBusinessEnd);
@@ -229,8 +231,9 @@ class _ReportsScreenState extends State<ReportsScreen>
       String menuName, {
         DateTimeRange? customRange,
       }) async {
-    DateTimeRange dateRange =
-    _getBusinessDateRange(period, _businessDayStartTime, customRange: customRange);
+    DateTimeRange dateRange = _getBusinessDateRange(
+        period, _businessDayStartTime,
+        customRange: customRange);
 
     double totalSalesRevenue = 0;
     double totalSupplierCosts = 0;
@@ -261,6 +264,8 @@ class _ReportsScreenState extends State<ReportsScreen>
       }
 
       final salesSnapshot = await salesQuery.get();
+
+      // Group by Bill Number or Session Key
       final Map<String, List<QueryDocumentSnapshot>> bills = {};
       for (var doc in salesSnapshot.docs) {
         final data = doc.data() as Map<String, dynamic>;
@@ -269,70 +274,152 @@ class _ReportsScreenState extends State<ReportsScreen>
             doc.id;
         bills.putIfAbsent(key, () => []).add(doc);
       }
-      totalOrders = bills.length;
 
       for (var billGroup in bills.values) {
-        final doc = billGroup.first;
-        final data = doc.data() as Map<String, dynamic>;
+        double billRealTotal = 0.0;
+        QueryDocumentSnapshot? representativeDoc;
+        DateTime? billedAt;
+        String orderType = 'Dine-In';
 
-        final finalTotal =
-            (data['billingDetails']?['finalTotal'] as num?)?.toDouble() ?? 0.0;
-        totalSalesRevenue += finalTotal;
-
-        final billedAt =
-        (data['billingDetails']?['billedAt'] as Timestamp?)?.toDate();
-        if (billedAt != null) {
-          DateTime businessDayStartForBill = DateTime(
-              billedAt.year,
-              billedAt.month,
-              billedAt.day,
-              _businessDayStartTime.hour,
-              _businessDayStartTime.minute);
-          if (billedAt.isBefore(businessDayStartForBill)) {
-            businessDayStartForBill =
-                businessDayStartForBill.subtract(const Duration(days: 1));
-          }
-          final dateKey = DateFormat('MMM d').format(businessDayStartForBill);
-          dailyTimeSeriesRevenue.update(dateKey, (value) => value + finalTotal,
-              ifAbsent: () => finalTotal);
-        }
-
-        final orderType = (data['orderType'] as String?) ?? 'Dine-In';
-        orderTypeDistribution.update(orderType, (value) => value + 1,
-            ifAbsent: () => 1);
-        orderTypeDetails.putIfAbsent(orderType, () => []).add(doc);
+        double rawTotalOfAllItems = 0.0;
+        double rawTotalOfFilteredItems = 0.0;
 
         for (var orderDoc in billGroup) {
           final orderData = orderDoc.data() as Map<String, dynamic>;
+
+          if (orderData['billingDetails'] != null &&
+              orderData['billingDetails']['finalTotal'] != null) {
+            billRealTotal =
+                (orderData['billingDetails']['finalTotal'] as num).toDouble();
+            billedAt = (orderData['billingDetails']['billedAt'] as Timestamp?)
+                ?.toDate();
+            representativeDoc = orderDoc;
+          }
+          if (orderData['orderType'] != null) orderType = orderData['orderType'];
+          if (representativeDoc == null) representativeDoc = orderDoc;
+
           final items =
           List<Map<String, dynamic>>.from(orderData['items'] ?? []);
+
           for (var item in items) {
+            final qty = (item['quantity'] as num?)?.toInt() ?? 0;
+            final price = (item['price'] as num?)?.toDouble() ?? 0.0;
+            final rawItemTotal = price * qty;
+
+            rawTotalOfAllItems += rawItemTotal;
+
+            // --- FIX: Correct variable names used here ---
             final itemMenuName = item['menuName'] as String? ?? '';
 
-            if (menuName != 'All' && itemMenuName != menuName) {
-              continue;
+            bool includeItem = false;
+
+            if (menuName == 'All') {
+              includeItem = true;
+            } else if (menuName == 'Uncategorized') {
+              // Check if known or empty
+              bool isKnownMenu = _allMenus.containsKey(itemMenuName) &&
+                  itemMenuName != 'Quick Bill' &&
+                  itemMenuName != 'Uncategorized';
+              if (itemMenuName.isEmpty || !isKnownMenu) includeItem = true;
+            } else {
+              // Exact match
+              includeItem = itemMenuName == menuName;
             }
 
-            final name = item['name'] as String;
-            final qty = (item['quantity'] as num?)?.toInt() ?? 0;
-            final productKey = '$name ($itemMenuName)';
-            productSales.update(productKey, (value) => value + qty,
-                ifAbsent: () => qty);
+            if (includeItem) {
+              rawTotalOfFilteredItems += rawItemTotal;
 
-            final itemPrice = (item['price'] as num?)?.toDouble() ?? 0.0;
-            final itemTotal = (itemPrice * qty).toDouble();
+              final name = item['name'] as String;
+              final productKey = '$name ($itemMenuName)';
+              productSales.update(productKey, (value) => value + qty,
+                  ifAbsent: () => qty);
+            }
+          }
+        }
 
-            final menuItem = menuItemsMap[item['menuItemId']];
-            String category = menuItem?.category ?? 'Other';
-            final categoryKey = '$category ($itemMenuName)';
-            categoryRevenue.update(categoryKey, (value) => value + itemTotal,
-                ifAbsent: () => itemTotal);
+        if (billRealTotal == 0.0 && rawTotalOfAllItems > 0) {
+          billRealTotal = rawTotalOfAllItems;
+        }
+
+        if (rawTotalOfFilteredItems > 0) {
+          double contributionRatio = 1.0;
+          if (rawTotalOfAllItems > 0) {
+            contributionRatio = rawTotalOfFilteredItems / rawTotalOfAllItems;
+          }
+
+          final actualRevenueFromThisMenu = billRealTotal * contributionRatio;
+
+          totalSalesRevenue += actualRevenueFromThisMenu;
+          totalOrders++;
+
+          if (billedAt != null) {
+            DateTime businessDayStartForBill = DateTime(
+                billedAt.year,
+                billedAt.month,
+                billedAt.day,
+                _businessDayStartTime.hour,
+                _businessDayStartTime.minute);
+            if (billedAt.isBefore(businessDayStartForBill)) {
+              businessDayStartForBill =
+                  businessDayStartForBill.subtract(const Duration(days: 1));
+            }
+            final dateKey = DateFormat('MMM d').format(businessDayStartForBill);
+            dailyTimeSeriesRevenue.update(
+                dateKey, (value) => value + actualRevenueFromThisMenu,
+                ifAbsent: () => actualRevenueFromThisMenu);
+          }
+
+          orderTypeDistribution.update(orderType, (value) => value + 1,
+              ifAbsent: () => 1);
+          if (representativeDoc != null) {
+            orderTypeDetails
+                .putIfAbsent(orderType, () => [])
+                .add(representativeDoc);
+          }
+
+          // Category Revenue Logic
+          for (var orderDoc in billGroup) {
+            final items =
+            List<Map<String, dynamic>>.from(orderDoc['items'] ?? []);
+            for (var item in items) {
+              final itemMenuName = item['menuName'] as String? ?? '';
+
+              // --- FIX: Repeated logic with correct variable names ---
+              bool includeItem = false;
+              if (menuName == 'All') {
+                includeItem = true;
+              } else if (menuName == 'Uncategorized') {
+                bool isKnownMenu = _allMenus.containsKey(itemMenuName) &&
+                    itemMenuName != 'Quick Bill' &&
+                    itemMenuName != 'Uncategorized';
+                if (itemMenuName.isEmpty || !isKnownMenu) includeItem = true;
+              } else {
+                includeItem = itemMenuName == menuName;
+              }
+
+              if (includeItem) {
+                final qty = (item['quantity'] as num?)?.toInt() ?? 0;
+                final price = (item['price'] as num?)?.toDouble() ?? 0.0;
+                final rawTotal = price * qty;
+
+                final itemAttributedRevenue = rawTotalOfAllItems > 0
+                    ? (rawTotal / rawTotalOfAllItems) * billRealTotal
+                    : rawTotal;
+
+                final menuItem = menuItemsMap[item['menuItemId']];
+                String category = menuItem?.category ?? 'Other';
+                final categoryKey = '$category ($itemMenuName)';
+                categoryRevenue.update(
+                    categoryKey, (value) => value + itemAttributedRevenue,
+                    ifAbsent: () => itemAttributedRevenue);
+              }
+            }
           }
         }
       }
     }
 
-    // --- 2. FETCH SUPPLIER COSTS ---
+    // 2. SUPPLIER COSTS
     if (transactionType == 'All' || transactionType == 'Supplier Costs') {
       Query poQuery = FirebaseFirestore.instance
           .collection('restaurants')
@@ -356,7 +443,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       }
     }
 
-    // --- 3. FETCH STAFF COSTS ---
+    // 3. STAFF COSTS
     if (transactionType == 'All' || transactionType == 'Staff Costs') {
       final staffPayments = await _fetchStaffPayments(dateRange);
       for (var payment in staffPayments) {
@@ -368,7 +455,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       }
     }
 
-    // --- 4. PREPARE FINAL DATA ---
     final sortedTimeSeriesRevenue = Map.fromEntries(
         dailyTimeSeriesRevenue.entries.toList()
           ..sort((a, b) => DateFormat('MMM d')
@@ -384,23 +470,24 @@ class _ReportsScreenState extends State<ReportsScreen>
         .collection('inventory')
         .get();
 
-// --- FIX: Calculate profit estimate based on SALES only ---
-    double profitEstimate = totalSalesRevenue * 0.35;
-// ---------------------------------------------------------
+    double profitEstimate = 0.0;
 
-// Determine final revenue number
+    if (transactionType == 'All') {
+      profitEstimate =
+          totalSalesRevenue - (totalSupplierCosts + totalStaffCosts);
+    } else if (transactionType == 'Restaurant Sales') {
+      profitEstimate = totalSalesRevenue;
+    }
+
     double displayRevenue = 0;
-// double profitEstimate = 0; // <-- REMOVED
     String revenueTitle = 'Total Revenue';
 
     if (transactionType == 'All') {
-      // --- FIX: Change logic to be a SUM as requested ---
       displayRevenue = totalSalesRevenue + totalSupplierCosts + totalStaffCosts;
-      revenueTitle = 'Total Transactions'; // <-- Rename title
+      revenueTitle = 'Total Transactions';
     } else if (transactionType == 'Restaurant Sales') {
       displayRevenue = totalSalesRevenue;
       revenueTitle = 'Total Revenue (Sales)';
-      // profitEstimate = totalSalesRevenue * 0.35; // <-- REMOVED (already calculated above)
     } else if (transactionType == 'Supplier Costs') {
       displayRevenue = totalSupplierCosts;
       revenueTitle = 'Total Supplier Costs';
@@ -437,6 +524,9 @@ class _ReportsScreenState extends State<ReportsScreen>
       'staffSpendings': staffSpendings,
     };
   }
+
+  // ... (Rest of the file remains exactly the same: _showDayStartTimePicker, _selectDateRange, _getAppBarTitle, etc.) ...
+  // ... (Keep the build method and the rest of the widgets as they were) ...
 
   Future<void> _showDayStartTimePicker() async {
     final TimeOfDay? picked = await showTimePicker(
@@ -491,21 +581,26 @@ class _ReportsScreenState extends State<ReportsScreen>
     return '$title ($periodText)';
   }
 
-  // --- NEW: Build the filter bar ---
   PreferredSizeWidget _buildFilterBar(ThemeData theme) {
     final bgColor = theme.scaffoldBackgroundColor.withOpacity(0.85);
 
-    // Options for dropdowns
     final List<String> periodOptions = [
-      'Today', 'This Week', 'This Month', 'This Year', 'All', 'Custom'
+      'Today',
+      'This Week',
+      'This Month',
+      'This Year',
+      'All',
+      'Custom'
     ];
     final List<String> transactionTypeOptions = [
-      'All', 'Restaurant Sales', 'Supplier Costs', 'Staff Costs'
+      'All',
+      'Restaurant Sales',
+      'Supplier Costs',
+      'Staff Costs'
     ];
-    // Menu options are from _allMenus.keys
 
     return PreferredSize(
-      preferredSize: const Size.fromHeight(80.0), // Increased height
+      preferredSize: const Size.fromHeight(80.0),
       child: Container(
         color: bgColor,
         padding: const EdgeInsets.all(12.0),
@@ -513,7 +608,6 @@ class _ReportsScreenState extends State<ReportsScreen>
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              // --- 1. Date Range Filter ---
               _buildFilterDropdown(
                 context: context,
                 label: "Date Range",
@@ -532,7 +626,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                 }).toList(),
                 onChanged: (String? newValue) {
                   if (newValue == 'Custom') {
-                    _selectDateRange(); // This will set state and reload
+                    _selectDateRange();
                   } else {
                     setState(() {
                       _selectedPeriod = newValue!;
@@ -544,7 +638,6 @@ class _ReportsScreenState extends State<ReportsScreen>
               ),
               const SizedBox(width: 12),
 
-              // --- 2. Transaction Type Filter ---
               _buildFilterDropdown(
                 context: context,
                 label: "Transaction Type",
@@ -565,16 +658,16 @@ class _ReportsScreenState extends State<ReportsScreen>
               ),
               const SizedBox(width: 12),
 
-              // --- 3. Menu Filter ---
               _buildFilterDropdown(
                 context: context,
                 label: "Menu (Product Reports)",
                 icon: Icons.menu_book_outlined,
                 value: _selectedMenuName,
-                items: _allMenus.keys.map((String menuName) {
+                // --- FIX: Using the updated _allMenus map which now includes 'Quick Bill' ---
+                items: _allMenus.entries.map((entry) {
                   return DropdownMenuItem<String>(
-                    value: menuName,
-                    child: Text(menuName),
+                    value: entry.key, // Use the key (menuName) as the value
+                    child: Text(entry.value), // Use the value as the label
                   );
                 }).toList(),
                 onChanged: (String? newValue) {
@@ -591,7 +684,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     );
   }
 
-  // --- NEW: Helper widget for styled dropdowns ---
   Widget _buildFilterDropdown({
     required BuildContext context,
     required String label,
@@ -602,24 +694,25 @@ class _ReportsScreenState extends State<ReportsScreen>
   }) {
     final theme = Theme.of(context);
     return Container(
-      width: 200, // Give them a fixed width
+      width: 200,
       padding: const EdgeInsets.only(left: 12, right: 8),
       child: DropdownButtonFormField<String>(
         value: value,
         items: items,
         onChanged: onChanged,
-        isExpanded: true, // Allow text to fill
+        isExpanded: true,
         decoration: InputDecoration(
           prefixIcon: Icon(icon, size: 18, color: theme.primaryColor),
           labelText: label,
           labelStyle:
           theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
-          border: InputBorder.none, // Clean look
-          filled: false, // <-- FIX: Remove inner background
+          border: InputBorder.none,
+          filled: false,
           contentPadding: const EdgeInsets.fromLTRB(0, 16, 12, 16),
         ),
         dropdownColor: theme.colorScheme.surface,
-        style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold), // Style for selected item
+        style: theme.textTheme.bodyLarge
+            ?.copyWith(fontWeight: FontWeight.bold),
         isDense: true,
         icon: const Icon(Icons.arrow_drop_down),
       ),
@@ -629,7 +722,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final theme = Theme.of(context); // Get theme here
+    final theme = Theme.of(context);
 
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF1414E) : Colors.grey[50],
@@ -648,7 +741,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                   snap: true,
                   forceElevated: innerBoxIsScrolled,
                   backgroundColor:
-                  theme.scaffoldBackgroundColor.withOpacity(0.85), // FIX
+                  theme.scaffoldBackgroundColor.withOpacity(0.85),
                   elevation: 0,
                   actions: [
                     IconButton(
@@ -657,7 +750,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                       tooltip: 'Set Business Day Start Time',
                     ),
                   ],
-                  bottom: _buildFilterBar(theme), // FIX
+                  bottom: _buildFilterBar(theme),
                 ),
               ];
             },
@@ -669,7 +762,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
-                  print(snapshot.error); // For debugging
+                  print(snapshot.error);
                   return Center(child: Text('Error: ${snapshot.error}'));
                 }
                 if (!snapshot.hasData) {
@@ -756,7 +849,6 @@ class _ReportsScreenState extends State<ReportsScreen>
                       ),
                     ),
 
-                    // --- Conditionally show sales charts ---
                     if (_selectedTransactionType == 'All' ||
                         _selectedTransactionType == 'Restaurant Sales') ...[
                       _buildSectionHeader(theme, 'Sales & Order Breakdown',
@@ -836,7 +928,6 @@ class _ReportsScreenState extends State<ReportsScreen>
                       ),
                     ],
 
-                    // --- Conditionally show cost charts ---
                     if (_selectedTransactionType == 'All' ||
                         _selectedTransactionType == 'Supplier Costs' ||
                         _selectedTransactionType == 'Staff Costs') ...[
@@ -914,8 +1005,8 @@ class _ReportsScreenState extends State<ReportsScreen>
     );
   }
 
-  void _showOrderTypeDetails(
-      BuildContext context, Map<String, List<DocumentSnapshot>> orderTypeDetails) {
+  void _showOrderTypeDetails(BuildContext context,
+      Map<String, List<DocumentSnapshot>> orderTypeDetails) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -979,7 +1070,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     );
   }
 
-  // --- NEW: Show Staff Spending Details ---
   void _showStaffSpendingDetails(
       BuildContext context, Map<String, double> staffSpendings) {
     showModalBottomSheet(
@@ -1038,9 +1128,10 @@ class _ReportsScreenState extends State<ReportsScreen>
       color.withOpacity(0.1)
     ];
 
-    final primaryEntry =
-    data.entries.fold(const MapEntry('', 0.0), (a, b) => a.value > b.value ? a : b);
-    final primaryPercentage = total > 0 ? (primaryEntry.value / total * 100) : 0;
+    final primaryEntry = data.entries.fold(
+        const MapEntry('', 0.0), (a, b) => a.value > b.value ? a : b);
+    final primaryPercentage =
+    total > 0 ? (primaryEntry.value / total * 100) : 0;
 
     final List<MapEntry<String, double>> sortedEntries = data.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
@@ -1054,7 +1145,8 @@ class _ReportsScreenState extends State<ReportsScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(title,
-              style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
           Text(explanation,
               style: theme.textTheme.bodySmall?.copyWith(
@@ -1164,11 +1256,13 @@ class __CategoryBarContentState extends State<_CategoryBarContent> {
   @override
   Widget build(BuildContext context) {
     final maxRevenue = widget.data.values.fold(0.0, (a, b) => max(a, b));
-    const String explanation = 'Compares total revenue generated by each item group.';
+    const String explanation =
+        'Compares total revenue generated by each item group.';
     final currencyFormatter =
     NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
     final List<MapEntry<String, double>> sortedData =
-    widget.data.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    widget.data.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
     final itemsToShow = _isExpanded ? sortedData : sortedData.take(3).toList();
 
     return Padding(
@@ -1197,7 +1291,8 @@ class __CategoryBarContentState extends State<_CategoryBarContent> {
                       itemCount: itemsToShow.length,
                       itemBuilder: (context, index) {
                         final e = itemsToShow[index];
-                        final barWidth = maxRevenue > 0 ? (e.value / maxRevenue) : 0;
+                        final barWidth =
+                        maxRevenue > 0 ? (e.value / maxRevenue) : 0;
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 8.0),
                           child: Column(
@@ -1235,8 +1330,7 @@ class __CategoryBarContentState extends State<_CategoryBarContent> {
                                   FittedBox(
                                     child: Text(
                                       currencyFormatter.format(e.value),
-                                      style: widget
-                                          .theme.textTheme.bodyMedium
+                                      style: widget.theme.textTheme.bodyMedium
                                           ?.copyWith(
                                           fontWeight: FontWeight.bold),
                                     ),
@@ -1298,7 +1392,8 @@ class __SupplierSpendingBarContentState
     const String explanation =
         'Identifies your largest suppliers by total spending.';
     final List<MapEntry<String, double>> sortedData =
-    widget.data.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    widget.data.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
     final itemsToShow = _isExpanded ? sortedData : sortedData.take(3).toList();
 
     return Padding(
@@ -1411,7 +1506,6 @@ class __SupplierSpendingBarContentState
   }
 }
 
-// --- NEW: Staff Spending Bar Chart ---
 class _StaffSpendingBarContent extends StatefulWidget {
   final ThemeData theme;
   final String title;
@@ -1440,7 +1534,8 @@ class __StaffSpendingBarContentState extends State<_StaffSpendingBarContent> {
     NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
     const String explanation = 'Shows total payments made to staff members.';
     final List<MapEntry<String, double>> sortedData =
-    widget.data.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    widget.data.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
     final itemsToShow = _isExpanded ? sortedData : sortedData.take(3).toList();
 
     return Padding(

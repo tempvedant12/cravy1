@@ -1,12 +1,13 @@
-import 'dart:ui'; // Added for BackdropFilter
+// lib/screen/restaurant/staff/staff_detail_screen.dart
+
+import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cravy/screen/restaurant/staff/add_edit_staff_screen.dart';
 import 'package:cravy/screen/restaurant/staff/staff_and_roles_screen.dart';
 import 'package:cravy/screen/restaurant/staff/staff_payment_dialogs.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'dart:async'; // Import for StreamSubscription
-
+import 'dart:async';
 
 class StaffDetailScreen extends StatefulWidget {
   final String restaurantId;
@@ -25,17 +26,15 @@ class StaffDetailScreen extends StatefulWidget {
 class _StaffDetailScreenState extends State<StaffDetailScreen>
     with TickerProviderStateMixin {
   late TabController _tabController;
-  late Future<Staff> _staffFuture; // <-- Add future for live updates
+  late Future<Staff> _staffFuture;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _staffFuture = _fetchStaff(); // <-- Initialize future
+    _staffFuture = _fetchStaff();
   }
 
-  // --- NEW: Function to re-fetch staff data ---
-  // This is useful if the user edits the staff details and comes back
   Future<Staff> _fetchStaff() async {
     final doc = await FirebaseFirestore.instance
         .collection('restaurants')
@@ -44,10 +43,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
         .doc(widget.staff.id)
         .get();
 
-    // Fallback in case the staff member was deleted while on this screen
-    if (!doc.exists) {
-      return widget.staff;
-    }
+    if (!doc.exists) return widget.staff;
     return Staff.fromFirestore(doc);
   }
 
@@ -61,40 +57,29 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      extendBodyBehindAppBar: true, // For background
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        // Use a FutureBuilder to update the name if it's edited
         title: FutureBuilder<Staff>(
           future: _staffFuture,
           builder: (context, snapshot) {
             return Text(snapshot.data?.name ?? widget.staff.name);
           },
         ),
-        backgroundColor:
-        theme.scaffoldBackgroundColor.withOpacity(0.85), // Glassmorphic
+        backgroundColor: theme.scaffoldBackgroundColor.withOpacity(0.85),
         elevation: 0,
         actions: [
           IconButton(
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit Staff Member',
             onPressed: () async {
-              // --- FIX: Await the future to get the latest data ---
               final staffToEdit = await _staffFuture;
-
-              // Navigate to AddEditStaffScreen
               await Navigator.of(context).push(MaterialPageRoute(
                 builder: (context) => AddEditStaffScreen(
                   restaurantId: widget.restaurantId,
-                  staff: staffToEdit, // Pass the most recent data
+                  staff: staffToEdit,
                 ),
               ));
-              // --- NEW: Refresh staff data when returning ---
-              if (mounted) {
-                setState(() {
-                  _staffFuture = _fetchStaff();
-                });
-              }
-              // ---------------------------------------------
+              if (mounted) setState(() => _staffFuture = _fetchStaff());
             },
           ),
         ],
@@ -109,56 +94,44 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
       ),
       body: Stack(
         children: [
-          const _StaticBackground(), // Add background
-          // --- FIX: Wrap TabBarView in SafeArea ---
+          const _StaticBackground(),
           SafeArea(
             child: TabBarView(
               controller: _tabController,
               children: [
-                // Use FutureBuilder to pass the latest staff data to the tabs
                 FutureBuilder<Staff>(
                   future: _staffFuture,
-                  builder: (context, snapshot) {
-                    final staffData = snapshot.data ?? widget.staff;
-                    return _buildDetailsTab(theme, staffData);
-                  },
+                  builder: (context, snapshot) =>
+                      _buildDetailsTab(theme, snapshot.data ?? widget.staff),
                 ),
-                // --- MODIFIED: Pass staff to attendance tab ---
                 FutureBuilder<Staff>(
                   future: _staffFuture,
-                  builder: (context, snapshot) {
-                    final staffData = snapshot.data ?? widget.staff;
-                    return _AttendanceHistoryTab(
-                      restaurantId: widget.restaurantId,
-                      staff: staffData, // Pass the full staff object
-                    );
-                  },
+                  builder: (context, snapshot) => _AttendanceHistoryTab(
+                    restaurantId: widget.restaurantId,
+                    staff: snapshot.data ?? widget.staff,
+                  ),
                 ),
-                // ---------------------------------------------
                 FutureBuilder<Staff>(
                   future: _staffFuture,
-                  builder: (context, snapshot) {
-                    final staffData = snapshot.data ?? widget.staff;
-                    return _PaymentHistoryTab(
-                        restaurantId: widget.restaurantId, staff: staffData);
-                  },
+                  builder: (context, snapshot) => _PaymentHistoryTab(
+                    restaurantId: widget.restaurantId,
+                    staff: snapshot.data ?? widget.staff,
+                  ),
                 ),
               ],
             ),
           ),
-          // ---------------------------------------
         ],
       ),
     );
   }
 
-  // Helper to build the glassmorphic card
-  Widget _buildGlassCard({required Widget child, String? title}) {
+  Widget _buildGlassCard({required Widget child, String? title, EdgeInsets? padding}) {
     final theme = Theme.of(context);
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.all(20),
+        padding: padding ?? const EdgeInsets.all(20),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: Colors.white.withOpacity(0.2)),
@@ -173,6 +146,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             if (title != null) ...[
               Text(title, style: theme.textTheme.titleLarge),
@@ -185,7 +159,6 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
     );
   }
 
-  // --- MODIFIED: Accepts Staff object ---
   Widget _buildDetailsTab(ThemeData theme, Staff staff) {
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -218,17 +191,15 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
                   'Pay Rate',
                   staff.payRate == 0
                       ? 'N/A'
-                  // --- FIX: Added 'daily' logic ---
                       : '₹${staff.payRate.toStringAsFixed(2)} / ${staff.paymentType.toLowerCase() == 'salary' ? 'month' : (staff.paymentType.toLowerCase() == 'daily' ? 'day' : 'hour')}'),
-              // --- NEW: Show Salary Payday ---
+              _buildDetailRow(theme, Icons.access_time, 'Shift Start',
+                  staff.shiftStartTime.isEmpty ? '09:00' : staff.shiftStartTime),
               if (staff.paymentType == 'Salary')
                 _buildDetailRow(
                     theme,
                     Icons.calendar_month_outlined,
                     'Salary Payday',
-                    '${staff.salaryPayday.toString()}${_getDaySuffix(staff.salaryPayday)} of the month'
-                ),
-              // ---------------------------------
+                    '${staff.salaryPayday}${_getDaySuffix(staff.salaryPayday)} of month'),
             ],
           ),
         ),
@@ -237,18 +208,12 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
   }
 
   String _getDaySuffix(int day) {
-    if (day >= 11 && day <= 13) {
-      return 'th';
-    }
+    if (day >= 11 && day <= 13) return 'th';
     switch (day % 10) {
-      case 1:
-        return 'st';
-      case 2:
-        return 'nd';
-      case 3:
-        return 'rd';
-      default:
-        return 'th';
+      case 1: return 'st';
+      case 2: return 'nd';
+      case 3: return 'rd';
+      default: return 'th';
     }
   }
 
@@ -257,7 +222,6 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon, color: theme.primaryColor, size: 20),
           const SizedBox(width: 16),
@@ -276,111 +240,77 @@ class _StaffDetailScreenState extends State<StaffDetailScreen>
   }
 }
 
-// --- REFACTORED ATTENDANCE TAB (NOW STATEFUL WITH CALENDAR) ---
+// --- NEW SPLIT-VIEW ATTENDANCE TAB ---
 class _AttendanceHistoryTab extends StatefulWidget {
   final String restaurantId;
-  final Staff staff; // <-- Changed from staffId to full Staff object
+  final Staff staff;
 
-  const _AttendanceHistoryTab(
-      {required this.restaurantId, required this.staff});
+  const _AttendanceHistoryTab({required this.restaurantId, required this.staff});
 
   @override
   State<_AttendanceHistoryTab> createState() => _AttendanceHistoryTabState();
 }
 
 class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
-  DateTime _focusedMonth =
-  DateTime(DateTime.now().year, DateTime.now().month, 1);
-  DateTime? _selectedDay =
+  DateTime _focusedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  DateTime _selectedDay =
   DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-
   Map<DateTime, Attendance> _attendanceEvents = {};
-  // --- NEW: Store payments that overlap with this month ---
-  List<StaffPayment> _monthPayments = [];
-  // ------------------------------------------------------
   Attendance? _selectedDayAttendance;
-
   StreamSubscription? _attendanceSubscription;
-  StreamSubscription? _paymentSubscription; // <-- NEW
 
   @override
   void initState() {
     super.initState();
-    _fetchMonthData(); // <-- Renamed
+    _fetchMonthData();
   }
 
   @override
   void dispose() {
     _attendanceSubscription?.cancel();
-    _paymentSubscription?.cancel(); // <-- NEW
     super.dispose();
   }
 
-  // --- MODIFIED: Fetches both attendance and payments ---
   void _fetchMonthData() {
     _attendanceSubscription?.cancel();
-    _paymentSubscription?.cancel();
+    final startOfMonth = DateTime(_focusedMonth.year, _focusedMonth.month, 1);
+    final endOfMonth = DateTime(
+        _focusedMonth.year, _focusedMonth.month + 1, 0, 23, 59, 59);
 
-    final startOfMonth = _focusedMonth;
-    final endOfMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1, 0)
-        .add(const Duration(days: 1));
-
-    // 1. Fetch Attendance
     _attendanceSubscription = FirebaseFirestore.instance
         .collection('restaurants')
         .doc(widget.restaurantId)
         .collection('attendance')
-        .where('staffId', isEqualTo: widget.staff.id) // Use staff.id
+        .where('staffId', isEqualTo: widget.staff.id)
         .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfMonth))
-        .where('date', isLessThan: Timestamp.fromDate(endOfMonth))
+        .where('date', isLessThanOrEqualTo: Timestamp.fromDate(endOfMonth))
         .snapshots()
         .listen((snapshot) {
       if (mounted) {
         setState(() {
           _attendanceEvents = {
             for (var doc in snapshot.docs)
-              (doc['date'] as Timestamp).toDate():
-              Attendance.fromFirestore(doc)
+              (doc['date'] as Timestamp)
+                  .toDate()
+                  .copyWith(
+                  hour: 0,
+                  minute: 0,
+                  second: 0,
+                  millisecond: 0,
+                  microsecond: 0): Attendance.fromFirestore(doc)
           };
           _updateSelectedDayAttendance();
         });
       }
     });
-
-    // 2. Fetch Payments
-    _paymentSubscription = FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId)
-        .collection('staff')
-        .doc(widget.staff.id)
-        .collection('payments')
-    // Find payments where the *period* overlaps with the *month*
-        .where('payPeriodEnd', isGreaterThanOrEqualTo: startOfMonth)
-    // We also need to check the start, but Firestore can't do two range filters on different fields.
-    // So we filter by end date and will manually filter by start date in the listener.
-        .snapshots()
-        .listen((snapshot) {
-      if (mounted) {
-        setState(() {
-          _monthPayments = snapshot.docs
-              .map((doc) => StaffPayment.fromFirestore(doc))
-              .where((p) => p.payPeriodStart != null && p.payPeriodStart!.isBefore(endOfMonth)) // Manual filter
-              .toList();
-        });
-      }
-    });
   }
-  // ----------------------------------------------------
 
   void _updateSelectedDayAttendance() {
-    if (_selectedDay == null) {
-      _selectedDayAttendance = null;
-    } else {
-      // Normalize the selected day to avoid time-of-day issues
-      final normalizedSelectedDay =
-      DateTime(_selectedDay!.year, _selectedDay!.month, _selectedDay!.day);
-      _selectedDayAttendance = _attendanceEvents[normalizedSelectedDay];
-    }
+    final normalized =
+    DateTime(_selectedDay.year, _selectedDay.month, _selectedDay.day);
+    setState(() {
+      _selectedDayAttendance = _attendanceEvents[normalized];
+    });
   }
 
   void _onDaySelected(DateTime day) {
@@ -390,106 +320,99 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
     });
   }
 
-  void _onMonthChanged(bool isNext) {
+  void _onMonthChanged(int increment) {
     setState(() {
-      _focusedMonth = DateTime(
-          _focusedMonth.year, _focusedMonth.month + (isNext ? 1 : -1), 1);
-      // Clear selected day when changing month
-      _selectedDay = null;
-      _selectedDayAttendance = null;
-      _monthPayments = []; // Clear old payment data
+      _focusedMonth =
+          DateTime(_focusedMonth.year, _focusedMonth.month + increment, 1);
+      _selectedDay = DateTime(_focusedMonth.year, _focusedMonth.month, 1);
+      _attendanceEvents.clear();
     });
-    _fetchMonthData(); // <-- Renamed
+    _fetchMonthData();
   }
 
-  Future<void> _toggleSelectedDayAttendance() async {
-    if (_selectedDay == null) return;
-
-    // Normalize the day to midnight
-    final normalizedDay =
-    DateTime(_selectedDay!.year, _selectedDay!.month, _selectedDay!.day);
-
-    final attendanceRef = FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId)
-        .collection('attendance');
-
-    // Cannot edit attendance for future dates
-    final today =
-    DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    if (normalizedDay.isAfter(today)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Cannot modify attendance for a future date.')));
-      return;
-    }
-
-    if (_selectedDayAttendance == null) {
-      // No record, create one (mark as PRESENT)
-      await attendanceRef.add({
-        'staffId': widget.staff.id,
-        'date': Timestamp.fromDate(normalizedDay), // Use normalized day
-        'isPresent': true,
-      });
-    } else {
-      // Record exists, update it
-      await attendanceRef
-          .doc(_selectedDayAttendance!.id)
-          .update({'isPresent': !_selectedDayAttendance!.isPresent});
-    }
-    // The stream will automatically update the UI
+  void _openEditDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => _EditAttendanceDialog(
+        restaurantId: widget.restaurantId,
+        staff: widget.staff,
+        date: _selectedDay,
+        existingAttendance: _selectedDayAttendance,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _buildGlassCard(
-          child: Column(
+    // --- RESPONSIVE LAYOUT BUILDER ---
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Use a breakpoint to decide between split view and list view
+        bool isWide = constraints.maxWidth > 700;
+
+        if (isWide) {
+          // --- SPLIT VIEW (50% Calendar / 50% Details) ---
+          return Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Left Side: Calendar (Takes full height)
+                Expanded(
+                  flex: 1,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                    ),
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      children: [
+                        _buildCalendarHeader(context),
+                        const SizedBox(height: 16),
+                        // Calendar Grid needs to take remaining space
+                        Expanded(
+                          child: _buildCalendarGrid(context, isCompact: false),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 24),
+                // Right Side: Details (Takes full height)
+                Expanded(
+                  flex: 1,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                    ),
+                    padding: const EdgeInsets.all(24),
+                    child: _buildDayTimeline(context),
+                  ),
+                ),
+              ],
+            ),
+          );
+        } else {
+          // --- MOBILE LIST VIEW (Original Layout) ---
+          return ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
             children: [
               _buildCalendarHeader(context),
-              _buildWeekHeader(context),
-              _buildCalendarGrid(context),
+              const SizedBox(height: 16),
+              // On mobile, grid wraps content height, doesn't expand
+              _buildCalendarGrid(context, isCompact: true),
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 8),
+              _buildDayTimeline(context),
             ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        _buildAttendanceToggle(context),
-      ],
-    );
-  }
-
-  // Helper to build the glassmorphic card
-  Widget _buildGlassCard({required Widget child, String? title}) {
-    final theme = Theme.of(context);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        // Reduced padding slightly
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.2)),
-          gradient: LinearGradient(
-            colors: [
-              theme.colorScheme.surface.withOpacity(0.3),
-              theme.colorScheme.surface.withOpacity(0.1),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (title != null) ...[
-              Text(title, style: theme.textTheme.titleLarge),
-              const Divider(height: 24),
-            ],
-            child,
-          ],
-        ),
-      ),
+          );
+        }
+      },
     );
   }
 
@@ -497,183 +420,428 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        IconButton(
-          icon: const Icon(Icons.chevron_left),
-          onPressed: () => _onMonthChanged(false),
-        ),
-        Text(
-          DateFormat.yMMMM().format(_focusedMonth),
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        IconButton(
-          icon: const Icon(Icons.chevron_right),
-          onPressed: () => _onMonthChanged(true),
+        Text(DateFormat.yMMMM().format(_focusedMonth),
+            style: Theme.of(context)
+                .textTheme
+                .headlineSmall
+                ?.copyWith(fontWeight: FontWeight.bold)),
+        Row(
+          children: [
+            IconButton(
+                icon: const Icon(Icons.chevron_left),
+                onPressed: () => _onMonthChanged(-1)),
+            IconButton(
+                icon: const Icon(Icons.chevron_right),
+                onPressed: () => _onMonthChanged(1)),
+          ],
         ),
       ],
     );
   }
 
-  Widget _buildWeekHeader(BuildContext context) {
-    final daysOfWeek = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-    return GridView.count(
-      crossAxisCount: 7,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: 4.0,
-      children: daysOfWeek
-          .map((day) => Center(
-        child: Text(
-          day,
-          style: Theme.of(context).textTheme.bodySmall,
+  Widget _buildCalendarGrid(BuildContext context, {required bool isCompact}) {
+    final theme = Theme.of(context);
+    final daysInMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1, 0).day;
+    final firstWeekday = DateTime(_focusedMonth.year, _focusedMonth.month, 1).weekday;
+    final offset = firstWeekday == 7 ? 0 : firstWeekday;
+    final weekDays = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+    // In expanded mode, we want cells to stretch to fill height
+    // We calculate a childAspectRatio based on available height (not easy in standard GridView)
+    // OR we use LayoutBuilder inside Expanded to calculate fit.
+
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: weekDays.map((d) => Expanded(
+            child: Text(d, textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold, color: Colors.grey)),
+          )).toList(),
         ),
-      ))
-          .toList(),
+        const SizedBox(height: 12),
+        // Use Flexible/Expanded for the grid if not compact
+        isCompact
+            ? _buildGrid(theme, daysInMonth, offset, 1.3) // Fixed ratio for mobile
+            : Expanded(
+          child: LayoutBuilder(builder: (context, constraints) {
+            // Calculate aspect ratio to fill the height
+            // 5 or 6 rows usually.
+            // Estimate rows: (days + offset) / 7
+            int rows = ((daysInMonth + offset) / 7).ceil();
+            double cellHeight = (constraints.maxHeight - (rows * 8)) / rows;
+            double cellWidth = (constraints.maxWidth - (6 * 4)) / 7;
+            double ratio = cellWidth / cellHeight;
+
+            return _buildGrid(theme, daysInMonth, offset, ratio);
+          }),
+        ),
+      ],
     );
   }
 
-  Widget _buildCalendarGrid(BuildContext context) {
-    final theme = Theme.of(context);
-    final daysInMonth =
-        DateTime(_focusedMonth.year, _focusedMonth.month + 1, 0).day;
-    final firstDayWeekday = _focusedMonth.weekday;
-    final gridStartIndex = firstDayWeekday % 7; // 0=Sunday, 1=Monday...
-
+  Widget _buildGrid(ThemeData theme, int daysInMonth, int offset, double ratio) {
     return GridView.builder(
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+      physics: const NeverScrollableScrollPhysics(), // No internal scroll
+      shrinkWrap: true, // Only if inside scrollable parent (mobile)
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 7,
-        // --- FIX: Changed aspect ratio to 1.0 to make cells square ---
-        childAspectRatio: 1.0,
+        childAspectRatio: ratio,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 4,
       ),
-      itemCount: daysInMonth + gridStartIndex,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
+      itemCount: daysInMonth + offset,
       itemBuilder: (context, index) {
-        if (index < gridStartIndex) {
-          return Container(); // Empty cell before the 1st day
-        }
+        if (index < offset) return const SizedBox.shrink();
 
-        final day = index - gridStartIndex + 1;
+        final day = index - offset + 1;
         final date = DateTime(_focusedMonth.year, _focusedMonth.month, day);
         final attendance = _attendanceEvents[date];
 
-        final isSelected = _selectedDay != null &&
-            date.year == _selectedDay!.year &&
-            date.month == _selectedDay!.month &&
-            date.day == _selectedDay!.day;
+        final isSelected = date.year == _selectedDay.year &&
+            date.month == _selectedDay.month &&
+            date.day == _selectedDay.day;
 
-        // --- NEW: Check if this day is part of a paid period ---
-        final bool isPaid = _monthPayments.any((p) {
-          // Normalize dates to ignore time
-          final startDate = DateTime(p.payPeriodStart!.year, p.payPeriodStart!.month, p.payPeriodStart!.day);
-          final endDate = DateTime(p.payPeriodEnd!.year, p.payPeriodEnd!.month, p.payPeriodEnd!.day);
-          return !date.isBefore(startDate) && !date.isAfter(endDate);
-        });
-        // ------------------------------------------------------
+        final isToday = DateTime.now().year == date.year &&
+            DateTime.now().month == date.month &&
+            DateTime.now().day == date.day;
+
+        Color? dotColor;
+        if (attendance != null) {
+          if (attendance.status == 'Present') dotColor = Colors.green;
+          else if (attendance.status == 'Late') dotColor = Colors.orange;
+          else if (attendance.status == 'Absent') dotColor = Colors.red;
+          else if (attendance.status == 'Early') dotColor = Colors.blue;
+          else if (attendance.status == 'Half Day') dotColor = Colors.purple;
+        }
 
         return GestureDetector(
           onTap: () => _onDaySelected(date),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            margin: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? theme.primaryColor.withOpacity(0.3)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // --- NEW: Show dollar sign if paid ---
-                if (isPaid)
-                  Positioned(
-                    top: 4,
-                    left: 4,
-                    child: Icon(
-                      Icons.attach_money,
-                      color: Colors.green.withOpacity(0.8),
-                      size: 14,
-                    ),
+          behavior: HitTestBehavior.opaque,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: isSelected
+                    ? BoxDecoration(
+                  color: theme.primaryColor,
+                  shape: BoxShape.circle,
+                )
+                    : null,
+                alignment: Alignment.center,
+                child: Text(
+                  '$day',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: isSelected
+                        ? Colors.white
+                        : (isToday ? theme.primaryColor : theme.textTheme.bodyMedium?.color),
+                    fontWeight: isSelected || isToday
+                        ? FontWeight.bold
+                        : FontWeight.normal,
                   ),
-                // -------------------------------------
-                Text(day.toString()),
-                if (attendance != null)
-                  Positioned(
-                    bottom: 4,
-                    child: Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color:
-                        attendance.isPresent ? Colors.green : Colors.red,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  )
-              ],
-            ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              if (dotColor != null)
+                Container(
+                  width: 5,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: dotColor,
+                    shape: BoxShape.circle,
+                  ),
+                )
+              else
+                const SizedBox(height: 5),
+            ],
           ),
         );
       },
     );
   }
 
-  Widget _buildAttendanceToggle(BuildContext context) {
-    if (_selectedDay == null) {
-      // Show a prompt if no day is selected
-      return _buildGlassCard(
-        child: Center(
-          child: Text(
-            'Select a day to view or edit attendance.',
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
-        ),
+  Widget _buildDayTimeline(BuildContext context) {
+    final theme = Theme.of(context);
+    final att = _selectedDayAttendance;
+    final isFuture = _selectedDay.isAfter(DateTime.now());
+
+    final dateString = DateFormat.yMMMMEEEEd().format(_selectedDay);
+
+    if (att == null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center, // Center vertically in empty state
+        children: [
+          _buildTimelineHeader(theme, dateString),
+          const SizedBox(height: 40), // More space
+          Center(
+            child: Column(
+              children: [
+                Icon(Icons.event_note, size: 48, color: theme.dividerColor),
+                const SizedBox(height: 16),
+                Text("No records for this day.",
+                    style: theme.textTheme.bodyLarge), // Larger text
+                const SizedBox(height: 24),
+                if (!isFuture)
+                  ElevatedButton.icon( // More prominent button
+                    onPressed: _openEditDialog,
+                    icon: const Icon(Icons.add),
+                    label: const Text("Add Attendance"),
+                  ),
+              ],
+            ),
+          )
+        ],
       );
     }
 
-    final theme = Theme.of(context);
-    final status = _selectedDayAttendance?.isPresent;
-    final String statusText =
-    status == null ? 'No Record' : (status ? 'Present' : 'Absent');
-    final Color statusColor =
-    status == null ? Colors.grey : (status ? Colors.green : Colors.red);
+    String checkIn = att.checkIn != null ? DateFormat.jm().format(att.checkIn!) : '--:--';
+    String checkOut = att.checkOut != null ? DateFormat.jm().format(att.checkOut!) : '--:--';
+    String duration = '--';
+    if (att.checkIn != null && att.checkOut != null) {
+      final diff = att.checkOut!.difference(att.checkIn!);
+      duration = '${diff.inHours}h ${diff.inMinutes.remainder(60)}m';
+    } else if (att.checkIn != null) {
+      duration = 'In Progress';
+    }
 
-    // --- FIX: Shorter button text to prevent overflow ---
-    final String buttonText = status == null
-        ? 'Mark Present'
-        : (status ? 'Mark Absent' : 'Mark Present');
-    // ----------------------------------------------------
+    Color statusColor = Colors.grey;
+    if (att.status == 'Present') statusColor = Colors.green;
+    else if (att.status == 'Late') statusColor = Colors.orange;
+    else if (att.status == 'Absent') statusColor = Colors.red;
 
-    // Disable button for future dates
-    final bool isFutureDate = _selectedDay!.isAfter(
-        DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day));
-
-    return _buildGlassCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              DateFormat.yMMMd().format(_selectedDay!),
-              style: theme.textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              statusText,
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: statusColor,
-                fontWeight: FontWeight.bold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: isFutureDate ? null : _toggleSelectedDayAttendance,
-              // --- FIX: Use new button text ---
-              child: Text(isFutureDate ? 'Cannot Edit Future' : buttonText),
+            Text(dateString, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+            IconButton(onPressed: _openEditDialog, icon: const Icon(Icons.edit, size: 20), padding: EdgeInsets.zero,),
+          ],
+        ),
+        const SizedBox(height: 32), // More spacing
+        // Status Row
+        Row(
+          children: [
+            Container(width: 4, height: 50, color: statusColor, margin: const EdgeInsets.only(right: 16)),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(att.status.toUpperCase(), style: theme.textTheme.bodyMedium?.copyWith(color: statusColor, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+                const SizedBox(height: 8),
+                Text("Total: $duration", style: theme.textTheme.headlineSmall), // Larger Total
+              ],
             )
           ],
-        ));
+        ),
+        const SizedBox(height: 40), // More spacing
+        // Timeline
+        _buildTimelineItem(theme, "Check In", checkIn, Icons.login, isFirst: true),
+        _buildTimelineItem(theme, "Check Out", checkOut, Icons.logout, isLast: true),
+      ],
+    );
+  }
+
+  Widget _buildTimelineHeader(ThemeData theme, String text) {
+    return Text(text, style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold));
+  }
+
+  Widget _buildTimelineItem(ThemeData theme, String title, String time, IconData icon, {bool isFirst = false, bool isLast = false}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 50,
+          child: Column(
+            children: [
+              Container(width: 2, height: 15, color: isFirst ? Colors.transparent : theme.dividerColor),
+              Container(
+                padding: const EdgeInsets.all(10), // Larger circle
+                decoration: BoxDecoration(color: theme.scaffoldBackgroundColor, shape: BoxShape.circle, border: Border.all(color: theme.dividerColor)),
+                child: Icon(icon, size: 18, color: theme.textTheme.bodyMedium?.color),
+              ),
+              Container(width: 2, height: 40, color: isLast ? Colors.transparent : theme.dividerColor),
+            ],
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 12.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(title, style: theme.textTheme.titleMedium),
+                Text(time, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        )
+      ],
+    );
+  }
+}
+
+// --- DIALOG FOR EDITING ATTENDANCE (Unchanged) ---
+class _EditAttendanceDialog extends StatefulWidget {
+  final String restaurantId;
+  final Staff staff;
+  final DateTime date;
+  final Attendance? existingAttendance;
+
+  const _EditAttendanceDialog({
+    required this.restaurantId,
+    required this.staff,
+    required this.date,
+    this.existingAttendance,
+  });
+
+  @override
+  State<_EditAttendanceDialog> createState() => _EditAttendanceDialogState();
+}
+
+class _EditAttendanceDialogState extends State<_EditAttendanceDialog> {
+  String _status = 'Absent';
+  TimeOfDay? _checkIn;
+  TimeOfDay? _checkOut;
+  final List<String> _statuses = ['Present', 'Late', 'Absent', 'Half Day', 'Holiday'];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.existingAttendance != null) {
+      _status = widget.existingAttendance!.status.isNotEmpty ? widget.existingAttendance!.status : 'Present';
+      if (widget.existingAttendance!.checkIn != null) {
+        _checkIn = TimeOfDay.fromDateTime(widget.existingAttendance!.checkIn!);
+      }
+      if (widget.existingAttendance!.checkOut != null) {
+        _checkOut = TimeOfDay.fromDateTime(widget.existingAttendance!.checkOut!);
+      }
+    } else {
+      _status = 'Present';
+      final parts = widget.staff.shiftStartTime.split(':');
+      _checkIn = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+    }
+  }
+
+  void _calculateAutoStatus() {
+    if (_checkIn == null) return;
+    final parts = widget.staff.shiftStartTime.split(':');
+    final shiftStart = DateTime(0, 1, 1, int.parse(parts[0]), int.parse(parts[1]));
+    final actualStart = DateTime(0, 1, 1, _checkIn!.hour, _checkIn!.minute);
+
+    if (actualStart.isAfter(shiftStart.add(const Duration(minutes: 15)))) {
+      setState(() => _status = 'Late');
+    } else {
+      setState(() => _status = 'Present');
+    }
+  }
+
+  Future<void> _pickTime(bool isCheckIn) async {
+    final initial = isCheckIn ? _checkIn : _checkOut;
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: initial ?? TimeOfDay.now(),
+    );
+
+    if (picked != null) {
+      setState(() {
+        if (isCheckIn) {
+          _checkIn = picked;
+          _calculateAutoStatus();
+        } else {
+          _checkOut = picked;
+        }
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    final ref = FirebaseFirestore.instance.collection('restaurants').doc(widget.restaurantId).collection('attendance');
+
+    DateTime? inDate;
+    DateTime? outDate;
+
+    if (_checkIn != null) {
+      inDate = DateTime(widget.date.year, widget.date.month, widget.date.day, _checkIn!.hour, _checkIn!.minute);
+    }
+    if (_checkOut != null) {
+      outDate = DateTime(widget.date.year, widget.date.month, widget.date.day, _checkOut!.hour, _checkOut!.minute);
+    }
+
+    final data = {
+      'staffId': widget.staff.id,
+      'date': Timestamp.fromDate(widget.date),
+      'status': _status,
+      'checkIn': inDate != null ? Timestamp.fromDate(inDate) : null,
+      'checkOut': outDate != null ? Timestamp.fromDate(outDate) : null,
+    };
+
+    if (widget.existingAttendance == null) {
+      await ref.add(data);
+    } else {
+      await ref.doc(widget.existingAttendance!.id).update(data);
+    }
+    if (mounted) Navigator.pop(context);
+  }
+
+  Future<void> _delete() async {
+    if (widget.existingAttendance != null) {
+      await FirebaseFirestore.instance
+          .collection('restaurants')
+          .doc(widget.restaurantId)
+          .collection('attendance')
+          .doc(widget.existingAttendance!.id)
+          .delete();
+    }
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Edit ${DateFormat('MMM d').format(widget.date)}'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<String>(
+              value: _status,
+              decoration: const InputDecoration(labelText: 'Status'),
+              items: _statuses.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+              onChanged: (val) => setState(() => _status = val!),
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              title: const Text('Check In'),
+              subtitle: Text(_checkIn?.format(context) ?? 'Not Set'),
+              trailing: const Icon(Icons.access_time),
+              onTap: () => _pickTime(true),
+              tileColor: Colors.grey.withOpacity(0.1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              title: const Text('Check Out'),
+              subtitle: Text(_checkOut?.format(context) ?? 'Not Set'),
+              trailing: const Icon(Icons.access_time),
+              onTap: () => _pickTime(false),
+              tileColor: Colors.grey.withOpacity(0.1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        if (widget.existingAttendance != null)
+          TextButton(onPressed: _delete, child: Text('Clear', style: TextStyle(color: Theme.of(context).colorScheme.error))),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        ElevatedButton(onPressed: _save, child: const Text('Save')),
+      ],
+    );
   }
 }
 
@@ -683,7 +851,6 @@ class _PaymentHistoryTab extends StatelessWidget {
 
   const _PaymentHistoryTab({required this.restaurantId, required this.staff});
 
-  // --- MODIFIED: Call the new public function ---
   void _logPayment(BuildContext context) {
     showStaffPaymentDialog(context, staff, restaurantId);
   }
@@ -692,7 +859,6 @@ class _PaymentHistoryTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // --- NEW: Dynamic FAB label ---
     String fabLabel = 'Log Payment';
     IconData fabIcon = Icons.add;
     switch (staff.paymentType) {
@@ -709,10 +875,9 @@ class _PaymentHistoryTab extends StatelessWidget {
         fabIcon = Icons.access_time_outlined;
         break;
     }
-    // ----------------------------
 
     return Scaffold(
-      backgroundColor: Colors.transparent, // For background
+      backgroundColor: Colors.transparent,
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
             .collection('restaurants')
@@ -730,7 +895,6 @@ class _PaymentHistoryTab extends StatelessWidget {
             return const Center(child: Text('No payment history found.'));
           }
 
-          // --- MODIFIED: Use new StaffPayment model ---
           final payments = snapshot.data!.docs
               .map((doc) => StaffPayment.fromFirestore(doc))
               .toList();
@@ -742,14 +906,12 @@ class _PaymentHistoryTab extends StatelessWidget {
               final payment = payments[index];
               final String title = '₹${payment.amount.toStringAsFixed(2)}';
 
-              // --- NEW: Detailed subtitle ---
               String subtitle =
                   'Paid on: ${DateFormat.yMMMd().add_jm().format(payment.paidAt)}';
 
               if (payment.paymentType == 'Salary' && payment.payPeriodStart != null) {
                 subtitle += '\nFor: ${DateFormat.yMMMM().format(payment.payPeriodStart!)}';
               } else if (payment.payPeriodStart != null && payment.payPeriodEnd != null) {
-                // Check if it's a single day
                 final start = payment.payPeriodStart!;
                 final end = payment.payPeriodEnd!;
                 if (start.year == end.year && start.month == end.month && start.day == end.day) {
@@ -761,7 +923,6 @@ class _PaymentHistoryTab extends StatelessWidget {
               if (payment.notes.isNotEmpty) {
                 subtitle += '\nNotes: ${payment.notes}';
               }
-              // -----------------------------
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
@@ -775,7 +936,7 @@ class _PaymentHistoryTab extends StatelessWidget {
                     style: const TextStyle(
                         fontWeight: FontWeight.bold, fontSize: 18),
                   ),
-                  subtitle: Text(subtitle), // Use new subtitle
+                  subtitle: Text(subtitle),
                   trailing:
                   const Icon(Icons.check_circle, color: Colors.green),
                 ),
@@ -786,258 +947,13 @@ class _PaymentHistoryTab extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _logPayment(context),
-        icon: Icon(fabIcon), // Use new icon
-        label: Text(fabLabel), // Use new label
+        icon: Icon(fabIcon),
+        label: Text(fabLabel),
       ),
     );
   }
 }
 
-class _PaySalaryDialog extends StatefulWidget {
-  final String restaurantId;
-  final Staff staff;
-
-  const _PaySalaryDialog({required this.restaurantId, required this.staff});
-
-  @override
-  State<_PaySalaryDialog> createState() => _PaySalaryDialogState();
-}
-
-class _PaySalaryDialogState extends State<_PaySalaryDialog> {
-  late Future<List<StaffPayment>> _paymentHistoryFuture;
-  Set<String> _paidMonths = {}; // Stores "YYYY-MM"
-  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
-
-  @override
-  void initState() {
-    super.initState();
-    _paymentHistoryFuture = _fetchPaymentHistory();
-  }
-
-  Future<List<StaffPayment>> _fetchPaymentHistory() async {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId)
-        .collection('staff')
-        .doc(widget.staff.id)
-        .collection('payments')
-        .where('paymentType', isEqualTo: 'Salary')
-        .get();
-
-    final payments = snapshot.docs.map((doc) => StaffPayment.fromFirestore(doc)).toList();
-    _paidMonths = payments
-        .where((p) => p.payPeriodStart != null)
-        .map((p) => DateFormat('yyyy-MM').format(p.payPeriodStart!))
-        .toSet();
-
-    return payments;
-  }
-
-  Future<void> _payMonth(DateTime month) async {
-    final notes = 'Salary for ${DateFormat.yMMMM().format(month)}';
-    final amount = widget.staff.payRate;
-    final payPeriodStart = month;
-    final payPeriodEnd = DateTime(month.year, month.month + 1, 0); // Last day of the month
-
-    await FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId)
-        .collection('staff')
-        .doc(widget.staff.id)
-        .collection('payments')
-        .add({
-      'amount': amount,
-      'notes': notes,
-      'paidAt': FieldValue.serverTimestamp(),
-      'payRate': widget.staff.payRate,
-      'paymentType': 'Salary',
-      'payPeriodStart': Timestamp.fromDate(payPeriodStart),
-      'payPeriodEnd': Timestamp.fromDate(payPeriodEnd),
-    });
-
-    if (mounted) {
-      Navigator.of(context).pop(); // Close the dialog
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return AlertDialog(
-      title: Text('Pay Salary for ${widget.staff.name}'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: FutureBuilder<List<StaffPayment>>(
-          future: _paymentHistoryFuture,
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            // Generate list of last 12 months
-            final months = List.generate(12, (index) {
-              return DateTime(DateTime.now().year, DateTime.now().month - index, 1);
-            });
-
-            return ListView.builder(
-              shrinkWrap: true,
-              itemCount: months.length,
-              itemBuilder: (context, index) {
-                final month = months[index];
-                final monthKey = DateFormat('yyyy-MM').format(month);
-                final isPaid = _paidMonths.contains(monthKey);
-
-                return ListTile(
-                  title: Text(DateFormat.yMMMM().format(month)),
-                  subtitle: Text('Amount: ₹${widget.staff.payRate.toStringAsFixed(2)}'),
-                  trailing: isPaid
-                      ? const Chip(label: Text('PAID'), backgroundColor: Colors.green)
-                      : ElevatedButton(
-                    onPressed: () => _payMonth(month),
-                    child: const Text('Pay'),
-                  ),
-                );
-              },
-            );
-          },
-        ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close')),
-      ],
-    );
-  }
-}
-
-class _PayGenericDialog extends StatefulWidget {
-  final String restaurantId;
-  final Staff staff;
-
-  const _PayGenericDialog({required this.restaurantId, required this.staff});
-
-  @override
-  State<_PayGenericDialog> createState() => _PayGenericDialogState();
-}
-
-class _PayGenericDialogState extends State<_PayGenericDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _amountController = TextEditingController();
-  final _notesController = TextEditingController();
-  DateTimeRange? _payPeriod;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.staff.paymentType == 'Daily') {
-      _payPeriod = DateTimeRange(start: DateTime.now(), end: DateTime.now());
-    } else {
-      // Default to the last week for hourly
-      final today = DateTime.now();
-      final startOfWeek = today.subtract(Duration(days: today.weekday + 6));
-      _payPeriod = DateTimeRange(start: startOfWeek, end: today);
-    }
-  }
-
-  Future<void> _selectDateRange() async {
-    final picked = await showDateRangePicker(
-      context: context,
-      initialDateRange: _payPeriod,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
-    );
-    if (picked != null) {
-      setState(() {
-        _payPeriod = picked;
-      });
-    }
-  }
-
-  Future<void> _savePayment() async {
-    if (!_formKey.currentState!.validate()) return;
-    if (_payPeriod == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a pay period.')));
-      return;
-    }
-
-    final amount = double.tryParse(_amountController.text);
-
-    await FirebaseFirestore.instance
-        .collection('restaurants')
-        .doc(widget.restaurantId)
-        .collection('staff')
-        .doc(widget.staff.id)
-        .collection('payments')
-        .add({
-      'amount': amount,
-      'notes': _notesController.text.trim(),
-      'paidAt': FieldValue.serverTimestamp(),
-      'payRate': widget.staff.payRate,
-      'paymentType': widget.staff.paymentType,
-      'payPeriodStart': Timestamp.fromDate(_payPeriod!.start),
-      'payPeriodEnd': Timestamp.fromDate(_payPeriod!.end),
-    });
-
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDaily = widget.staff.paymentType == 'Daily';
-
-    return AlertDialog(
-      title: Text('Log ${widget.staff.paymentType} Pay'),
-      content: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: _amountController,
-                decoration: const InputDecoration(labelText: 'Amount Paid (₹)'),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                validator: (val) => (double.tryParse(val ?? '') ?? 0) <= 0
-                    ? 'Enter a valid amount'
-                    : null,
-              ),
-              const SizedBox(height: 16),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(isDaily ? 'Pay Date' : 'Pay Period'),
-                subtitle: Text(_payPeriod == null ? 'Not Set' :
-                (isDaily ? DateFormat.yMMMd().format(_payPeriod!.start)
-                    : '${DateFormat.yMd().format(_payPeriod!.start)} - ${DateFormat.yMd().format(_payPeriod!.end)}')),
-                trailing: const Icon(Icons.calendar_today),
-                onTap: _selectDateRange,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _notesController,
-                decoration: InputDecoration(labelText: 'Notes (e.g., ${isDaily ? 'Bonus' : '40 hours'})'),
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
-        ElevatedButton(
-          onPressed: _savePayment,
-          child: const Text('Save Payment'),
-        ),
-      ],
-    );
-  }
-}
-
-// --- NEW: BACKGROUND WIDGET ---
 class _StaticBackground extends StatelessWidget {
   const _StaticBackground();
   @override
