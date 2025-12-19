@@ -380,11 +380,21 @@ class _FloorGrid extends StatelessWidget {
           .doc(restaurantId)
           .collection('tables')
           .where('floorId', isEqualTo: floor.id)
-          .orderBy('label')
           .snapshots(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
         final tables = snapshot.data!.docs.map((doc) => TableModel.fromFirestore(doc)).toList();
+
+        tables.sort((a, b) {
+          final RegExp regex = RegExp(r'(\d+)');
+          final int? numA = int.tryParse(regex.firstMatch(a.label)?.group(0) ?? '');
+          final int? numB = int.tryParse(regex.firstMatch(b.label)?.group(0) ?? '');
+
+          if (numA != null && numB != null) {
+            return numA.compareTo(numB);
+          }
+          return a.label.compareTo(b.label);
+        });
 
         if (tables.isEmpty) {
           return const Center(child: Text("No tables on this floor. Add one from the Tables & Floor settings."));

@@ -68,6 +68,19 @@ class _AddEditReservationScreenState extends State<AddEditReservationScreen> {
       setState(() {
         _availableTables =
             snapshot.docs.map((doc) => TableModel.fromFirestore(doc)).toList();
+
+        // --- INSERT THIS SORTING LOGIC HERE ---
+        _availableTables.sort((a, b) {
+          final RegExp regex = RegExp(r'(\d+)');
+          final int? numA = int.tryParse(regex.firstMatch(a.label)?.group(0) ?? '');
+          final int? numB = int.tryParse(regex.firstMatch(b.label)?.group(0) ?? '');
+
+          if (numA != null && numB != null) {
+            return numA.compareTo(numB);
+          }
+          return a.label.compareTo(b.label);
+        });
+        // --------------------------------------
       });
     }
   }
