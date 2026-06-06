@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Unique Search Links</title>
+    <script>
+        // Function to generate random strings for query
+        function getRandomString(length) {
+            const characters = 'abcdefghijklmnopqrstuvwxyz0123456789';
+            let result = '';
+            for (let i = 0; i < length; i++) {
+                result += characters.charAt(Math.floor(Math.random() * characters.length));
+            }
+            return result;
+        }
+
+        // Function to dynamically generate unique search links with additional parameters
+        function generateUniqueLinks() {
+            const linkContainer = document.getElementById("linkContainer");
+            linkContainer.innerHTML = ''; // Clear previous links if any
+
+            for (let i = 0; i < 35; i++) {
+                const randomQuery = getRandomString(Math.floor(Math.random() * 5) + 2); // Random string length between 2 and 6
+                const cvid = getRandomString(32); // Random 32-character cvid
+                const gs_lcrp = `EgZjaHJvbWUyBggAEEUYOTIGCAEQABhAMgYIAhAjGCcyBggDECMYJzIGCAQQABhAMgYIBRAAGEAyBggGEAAYQDIGCAcQABhAMgYICBAAGEDSAQc1OTdqMGo5qAIEsAIB`; // Static example parameter (can be randomized too)
+
+                // Construct the full search URL
+                const searchUrl = `https://www.bing.com/search?q=${randomQuery}&cvid=${cvid}&gs_lcrp=${gs_lcrp}&FORM=ANAB01&PC=HCTS`;
+
+                // Create a new list item with the unique link
+                const li = document.createElement("li");
+                const a = document.createElement("a");
+                a.href = searchUrl;
+                a.target = "_blank";
+                a.textContent = `Search for: ${randomQuery}`;
+                li.appendChild(a);
+                linkContainer.appendChild(li);
+            }
+        }
+
+        // Function to open links one by one with a delay of 25 seconds
+        function openLinks() {
+            const links = document.querySelectorAll("#linkContainer li a"); // Get all the search links
+            let index = 0; // Start with the first link
+
+            function openNextLink() {
+                if (index < links.length) {
+                    window.open(links[index].href, "_blank"); // Open the current link in a new tab
+                    index++; // Move to the next link
+                    setTimeout(openNextLink, 10000); // Wait for 25 seconds before opening the next link
+                }
+            }
+
+            openNextLink(); // Start the process
+        }
+
+        // Initialize unique links when the page loads
+        window.onload = generateUniqueLinks;
+    </script>
+</head>
+
+<body>
+    <h1>Custom Random Search Links with Parameters</h1>
+    <button onclick="openLinks()">Start Searching</button>
+    <ul id="linkContainer"></ul>
+</body>
+
+</html>
